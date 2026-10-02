@@ -1,0 +1,60 @@
+{
+  "name": "@mcp-index/sdk",
+  "version": "0.13.0",
+  "description": "Pre-flight MCP tool-contract drift interceptor from mcpindex.ai, the drift-monitored MCP server index. One-line wrap() over an MCP client session that HOLDs a tool call before your agent runs it when the contract drifted from your pin. No credential handling.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "Bhartis LLC",
+  "homepage": "https://mcpindex.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mcpindex-ai/mcpindex-trust.git",
+    "directory": "clients/ts"
+  },
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "bin": {
+    "mcpindex": "./dist/src/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\"",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "mcpindex",
+    "model-context-protocol",
+    "drift",
+    "security",
+    "tofu",
+    "agent"
+  ],
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.0.0 <2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3"
+  }
+}
