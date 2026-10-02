@@ -1,0 +1,94 @@
+# Release workflow for @mcp-index/sdk.
+#
+# Dispatch only. A tag push is not a publish. On 2026-08-11 a tag push published
+# an unreviewed build, because an `environment:` protection rule cannot be
+# required on the GitHub Free plan. The person publishing picks an existing tag
+# and clicks Run workflow.
+#
+# npm trusted publisher (set this on the package; there is no token in this file):
+#   Organization: mcpindex-ai
+#   Repository:   mcpindex-sdk-ts
+#   Workflow:     release-sdk-npm.yml
+#   Environment:  blank. This workflow sets no `environment:` key. A value on
+#                 the npm record and a blank here fail the same way as a missing
+#                 record: an opaque 404 on PUT.
+#
+# The tag must be sdk-vX.Y.Z, must match package.json, and the tagged commit
+# must be contained in origin/main. npm will not let a version be reused.
+
+name: release-sdk-npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, e.g. sdk-v0.13.1. Must already be pushed and contained in main."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify the tagged commit is on main (fail-closed)
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          case "$TAG" in
+            sdk-v*) ;;
+            *) echo "::error::refusing to publish: '$TAG' is not a sdk-v* tag"; exit 1 ;;
+          esac
+          SHA="$(git rev-parse HEAD)"
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SHA" refs/remotes/origin/main; then
+            echo "::error::refusing to publish: $TAG points at $SHA, which is NOT contained in origin/main. Merge to main first, then tag the merge commit."
+            exit 1
+          fi
+          echo "ok: $TAG ($SHA) is contained in origin/main"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Node 22 ships npm 10, which does not attempt the OIDC exchange. It then
+      # reports a 404 that looks like a bad trusted-publisher record. npm 11.5.1
+      # or newer is required. Pinned: this job is OIDC-privileged.
+      - run: npm install -g npm@11.11.0
+
+      - name: Fail closed if tag != package.json version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_VERSION="${TAG#sdk-v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag sdk-v$TAG_VERSION != package.json $PKG_VERSION - bump the package before tagging"
+            exit 1
+          fi
+
+      - name: Fail closed if a staged CHANGELOG correction has not shipped
+        run: python3 scripts/check_changelog_correction.py
+
+      - name: Install and test
+        run: |
+          npm ci
+          bash scripts/ci-test.sh
+
+      # This repository is public, which is the condition npm requires before it
+      # will attach a provenance attestation. --provenance is explicit so a later
+      # edit cannot drop it and still look like a successful publish.
+      - name: Publish with provenance
+        run: npm publish --provenance --access public

@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      # The full `npm test` fails closed on the live-Python parity tests. Those
+      # run in mcpindex-trust, where this repo is checked out at clients/ts.
+      # This script names each skipped file and runs the rest.
+      - name: Test (self-contained files; parity skips are printed)
+        run: bash scripts/ci-test.sh

@@ -5,6 +5,14 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.13.1 - 2026-10-01
+
+### Changed
+
+- Source moved to https://github.com/mcpindex-ai/mcpindex-sdk-ts. This release
+  is built from that public repository and carries an npm provenance attestation.
+  No SDK behavior changed.
+
 ## 0.13.0 - 2026-09-30
 
 ### Added

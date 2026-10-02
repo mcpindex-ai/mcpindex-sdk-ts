@@ -1,14 +1,13 @@
 {
   "name": "@mcp-index/sdk",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Pre-flight MCP tool-contract drift interceptor from mcpindex.ai, the drift-monitored MCP server index. One-line wrap() over an MCP client session that HOLDs a tool call before your agent runs it when the contract drifted from your pin. No credential handling.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Bhartis LLC",
   "homepage": "https://mcpindex.ai",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mcpindex-ai/mcpindex-trust.git",
-    "directory": "clients/ts"
+    "url": "git+https://github.com/mcpindex-ai/mcpindex-sdk-ts.git"
   },
   "type": "module",
   "main": "./dist/src/index.js",
