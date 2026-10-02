@@ -17,24 +17,32 @@ echo "  That file is not here (ENOENT). The rest of the file runs with it, in mc
 echo "NOTE test/descriptionNumeric.test.ts runs here. Its corpus fixture parity_sample.json is absent, and that one test prints SKIP parity and returns. The behaviour table still runs."
 echo "NOTE test/parity.test.ts runs here. It compares pinned hash constants. It does not execute Python."
 
-for f in \
-  test/crossLangParity.test.ts \
-  test/driftTelemetry.test.ts \
-  test/holdMessage.test.ts
-do
-  if [ ! -f "$f" ]; then
-    echo "missing skipped file: $f" >&2
+# Every compiled test runs except the files named here. A new test file is
+# picked up without editing this script.
+SKIP="crossLangParity driftTelemetry holdMessage"
+
+for name in $SKIP; do
+  if [ ! -f "test/$name.test.ts" ]; then
+    echo "missing skipped file: test/$name.test.ts" >&2
     exit 1
   fi
 done
 
+rm -rf dist/test
 npm run build
-node --test \
-  dist/test/actionClass.test.js \
-  dist/test/ambient.test.js \
-  dist/test/descriptionNumeric.test.js \
-  dist/test/driftQuery.test.js \
-  dist/test/integration.test.js \
-  dist/test/login.test.js \
-  dist/test/parity.test.js \
-  dist/test/resultScan.test.js
+
+run=()
+while IFS= read -r js; do
+  name=$(basename "$js" .test.js)
+  case " $SKIP " in
+    *" $name "*) continue ;;
+  esac
+  run+=("$js")
+done < <(find dist/test -name '*.test.js' | sort)
+
+if [ "${#run[@]}" -eq 0 ]; then
+  echo "no test files found under dist/test" >&2
+  exit 1
+fi
+echo "RUN ${#run[@]} files: ${run[*]}"
+node --test "${run[@]}"
