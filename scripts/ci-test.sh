@@ -6,7 +6,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 echo "SKIP test/crossLangParity.test.ts"
-echo "  Three tests import live Python (trust.result_scan, trust.schema_scan, tooling.cse.schema_diff) via uv."
+echo "  Four tests import live Python (trust.result_scan, trust.schema_scan, tooling.cse.schema_diff, tooling.cse.gate) via uv."
 echo "  This repo has no such tree: ModuleNotFoundError. They run in mcpindex-trust."
 echo "SKIP test/driftTelemetry.test.ts"
 echo "  Two tests run uv with cwd at corpus_eval, four directories above the compiled test, to import tooling.cse.drift_telemetry."
