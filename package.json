@@ -1,6 +1,6 @@
 {
   "name": "@mcp-index/sdk",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Pre-flight MCP tool-contract drift interceptor from mcpindex.ai, the drift-monitored MCP server index. One-line wrap() over an MCP client session that HOLDs a tool call before your agent runs it when the contract drifted from your pin. No credential handling.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Bhartis LLC",

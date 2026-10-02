@@ -53,8 +53,13 @@ export enum Posture {
 
 // The change kinds GUARD treats as UNAMBIGUOUS-DANGEROUS (block even in the
 // lenient default posture). The full genuinely-BREAKING set.
-const GUARD_DANGEROUS_KINDS: ReadonlySet<ChangeKind> = new Set([
+export const GUARD_DANGEROUS_KINDS: ReadonlySet<ChangeKind> = new Set([
   ChangeKind.ANNOTATION_FLIP_TO_DESTRUCTIVE,
+  // A parameter value that newly leaves the request body for an HTTP header.
+  // Ranked with the "this tool now does something it did not before" kinds in
+  // friendlyBreakingClause. Default guard held the rest of that group and
+  // forwarded this one.
+  ChangeKind.PARAM_MIRRORED_TO_HEADER,
   ChangeKind.ADDED_REQUIRED_PARAM,
   ChangeKind.REQUIRED_SET_EXPANDED,
   ChangeKind.REMOVED_PARAM,

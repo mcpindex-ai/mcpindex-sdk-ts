@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-import { Gate, Posture, renderHoldBanner } from "../src/gate.js";
+import { Gate, GUARD_DANGEROUS_KINDS, Posture, renderHoldBanner } from "../src/gate.js";
 import { PreflightPin, Decision, ToolDef } from "../src/preflight.js";
 import { classifyChange, ChangeKind } from "../src/schemaDiff.js";
 import { STRING_KEYS, scanSchemaHasMarker, RESULT_MARKER_SOURCES } from "../src/scan.js";
@@ -322,8 +322,15 @@ test("H-MIRROR PARITY: x-mcp-header adoption classifies PARAM_MIRRORED_TO_HEADER
   assert.equal(changes[0].safetyRelevant, true);
 
   const gate = evalGate("n", base, obs);
-  const [stat] = gate.decide("n", obs);
+  const [stat, eff] = gate.decide("n", obs);
   assert.equal(stat.decision, Decision.HOLD);
+  // Default posture is guard. The static verdict was already HOLD; until 0.14.0
+  // applyPosture downgraded this kind to proceed-with-note because it was absent
+  // from GUARD_DANGEROUS_KINDS. The effective verdict is the one a caller sees.
+  assert.equal(eff.decision, Decision.HOLD, "default guard must hold a newly header-mirrored parameter");
+  const monitor = evalGate("n", base, obs, Posture.MONITOR);
+  const [, monEff] = monitor.decide("n", obs);
+  assert.equal(monEff.decision, Decision.PROCEED, "monitor still forwards this kind");
   // The self-describing verdict: byte-identical clause to gate.py _BREAKING_KIND_REASON.
   const banner = renderHoldBanner(stat);
   assert.ok(banner.includes("copied into an HTTP header"), banner);
@@ -371,4 +378,31 @@ test("PARITY ASSERTION: the TS ChangeKind taxonomy COVERS the live Python Change
   const tsKinds = new Set<string>(Object.values(ChangeKind));
   const missing = pyKinds.filter((k) => !tsKinds.has(k));
   assert.deepEqual(missing, [], `TS taxonomy is MISSING Python kinds (the client cannot explain them): ${missing.join(", ")}`);
+});
+
+test("PARITY ASSERTION: the TS GUARD dangerous set EQUALS the live Python _GUARD_DANGEROUS_KINDS", () => {
+  // The taxonomy assertion above only checks that both clients can NAME a kind.
+  // PARAM_MIRRORED_TO_HEADER was in both taxonomies and still absent from both
+  // guard sets, so default guard forwarded it while strict held it. Membership
+  // of the guard set is a separate contract. Read the live Python set; fail
+  // closed when that tree is absent, the same way the assertions above do.
+  const repoRoot = resolve(REPO_ROOT, "..");
+  let pyKinds: string[];
+  try {
+    const out = execFileSync(
+      "uv",
+      ["run", "--extra", "dev", "python", "-c", "import sys; sys.path.insert(0,'corpus_eval'); from tooling.cse.gate import _GUARD_DANGEROUS_KINDS; print(','.join(sorted(k.value for k in _GUARD_DANGEROUS_KINDS)))"],
+      { cwd: repoRoot, encoding: "utf8", timeout: 120000 },
+    );
+    pyKinds = out.trim().split("\n").pop()!.split(",").map((s) => s.trim()).filter(Boolean);
+  } catch (e) {
+    throw new Error(`could not read live Python _GUARD_DANGEROUS_KINDS for the parity assertion: ${String(e)}`);
+  }
+  assert.ok(pyKinds.length > 0, "read at least one Python guard kind");
+  const tsKinds = [...GUARD_DANGEROUS_KINDS].map((k) => String(k)).sort();
+  assert.deepEqual(
+    tsKinds,
+    pyKinds,
+    `guard sets diverged\n  ts: ${tsKinds.join(",")}\n  py: ${pyKinds.join(",")}`,
+  );
 });
