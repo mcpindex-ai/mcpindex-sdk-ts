@@ -5,6 +5,12 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.14.0 - 2026-10-02
+
+### Changed
+
+- Guard now holds a newly header-mirrored parameter, and users who want the old behaviour can run monitor.
+
 ## 0.13.1 - 2026-10-01
 
 ### Changed
