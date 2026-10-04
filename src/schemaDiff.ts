@@ -424,26 +424,71 @@ function classifyParamTypeDelta(
   return classifyConstraintDelta(path, oldProp, newProp);
 }
 
-function jsonEqual(a: unknown, b: unknown): boolean {
-  if (isDict(a) && isDict(b)) {
-    const ak = Object.keys(a);
-    const bk = Object.keys(b);
-    if (ak.length !== bk.length) return false;
-    const bs = new Set(bk);
-    for (const k of ak) {
-      if (!bs.has(k)) return false;
-      if (!jsonEqual(a[k], b[k])) return false;
+export const JSON_EQUAL_MAX_DEPTH = 64;
+
+export class UndiffableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UndiffableError";
+  }
+}
+
+export function jsonEqual(a: unknown, b: unknown): boolean {
+  const stack: Array<[unknown, unknown, number]> = [[a, b, 0]];
+  const seen = new WeakMap<object, WeakSet<object>>();
+  const revisit = (x: object, y: object): boolean => {
+    let inner = seen.get(x);
+    if (inner === undefined) {
+      inner = new WeakSet();
+      seen.set(x, inner);
     }
-    return true;
+    if (inner.has(y)) return true;
+    inner.add(y);
+    return false;
+  };
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (item === undefined) break;
+    const [x, y, depth] = item;
+    if (depth > JSON_EQUAL_MAX_DEPTH) {
+      throw new UndiffableError(`json equality exceeds depth ${JSON_EQUAL_MAX_DEPTH}`);
+    }
+    if (isDict(x) && isDict(y)) {
+      const ak = Object.keys(x);
+      const bk = Object.keys(y);
+      if (ak.length !== bk.length) return false;
+      const bs = new Set(bk);
+      for (const k of ak) {
+        if (!bs.has(k)) return false;
+      }
+      if (revisit(x, y)) {
+        throw new UndiffableError("json equality hit a cycle");
+      }
+      for (const k of ak) stack.push([x[k], y[k], depth + 1]);
+      continue;
+    }
+    if (Array.isArray(x) && Array.isArray(y)) {
+      if (x.length !== y.length) return false;
+      if (revisit(x, y)) {
+        throw new UndiffableError("json equality hit a cycle");
+      }
+      for (let i = 0; i < x.length; i++) stack.push([x[i], y[i], depth + 1]);
+      continue;
+    }
+    if (x !== y) return false;
   }
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((x, i) => jsonEqual(x, b[i]));
-  }
-  return a === b;
+  return true;
 }
 
 function undiffableAtBound(oldV: unknown, newV: unknown, path: string): Change[] {
-  if (jsonEqual(oldV, newV)) return [];
+  let equal = false;
+  try {
+    equal = jsonEqual(oldV, newV);
+  } catch (exc) {
+    if (!(exc instanceof UndiffableError)) throw exc;
+    equal = false;
+  }
+  if (equal) return [];
   return [
     mk(
       ChangeKind.DEEP_SCHEMA_UNDIFFABLE,

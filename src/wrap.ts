@@ -614,8 +614,9 @@ class Interceptor {
 
   private decideOrInternalHold(name: string, operation: Operation): PreflightVerdict {
     try {
-      let stat = this.gate.evaluate(name, this.observed.get(name) ?? null);
-      stat = this.maybeAutoValidate(name, stat);
+      const assessed = this.gate.assess(name, this.observed.get(name) ?? null);
+      const committed = this.gate.commit(assessed[0], assessed[2]);
+      let stat = this.maybeAutoValidate(name, committed[0]);
       const verdict = this.gate.applyPosture(stat);
       this.recordCall(name, stat, verdict);
       return verdict;

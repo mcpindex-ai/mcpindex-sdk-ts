@@ -94,7 +94,15 @@ function pythonFloatRepr(n: number): string {
   return `${mantissa}e${sign}${exp}`;
 }
 
-function canonicalize(o: unknown, depth: number): Json {
+const FLOATISH = /^-?[0-9]\.[0-9]{17}e[+-][0-9]{2,}$/;
+
+function contractString(s: string): string {
+  const n = nfc(s);
+  if (n.startsWith("\0") || FLOATISH.test(n)) return "\0" + n;
+  return n;
+}
+
+function canonicalize(o: unknown, depth: number, contract = false): Json {
   if (depth > MAX_CANON_DEPTH) {
     throw new Error("canonical depth exceeded");
   }
@@ -117,23 +125,42 @@ function canonicalize(o: unknown, depth: number): Json {
     return Number(o);
   }
   if (typeof o === "string") {
-    return nfc(o);
+    return contract ? contractString(o) : nfc(o);
   }
   if (Array.isArray(o)) {
-    return o.map((v) => canonicalize(v, depth + 1));
+    return o.map((v) => canonicalize(v, depth + 1, contract));
   }
   if (typeof o === "object") {
     const src = o as Record<string, unknown>;
-    // NFC-normalize keys, then sort by the normalized string (Python sorts by
-    // `str(k)`; all our keys are already strings).
-    const entries: Array<[string, unknown]> = Object.keys(src).map((k) => [
-      nfc(k),
-      src[k],
-    ]);
-    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const out: { [k: string]: Json } = {};
-    for (const [k, v] of entries) {
-      out[k] = canonicalize(v, depth + 1);
+    const keys = Object.keys(src);
+    if (!contract) {
+      // NFC-normalize keys, then sort by the normalized string (Python sorts by
+      // `str(k)`; all our keys are already strings).
+      const entries: Array<[string, unknown]> = keys.map((k) => [nfc(k), src[k]]);
+      entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      const out: { [k: string]: Json } = {};
+      for (const [k, v] of entries) {
+        out[k] = canonicalize(v, depth + 1, false);
+      }
+      return out;
+    }
+    const groups = new Map<string, string[]>();
+    for (const k of keys) {
+      const nk = nfc(k);
+      const g = groups.get(nk);
+      if (g === undefined) groups.set(nk, [k]);
+      else g.push(k);
+    }
+    const out = Object.create(null) as { [k: string]: Json };
+    for (const [nk, ks] of groups) {
+      if (ks.length === 1) {
+        const only = ks[0] as string;
+        out[nk] = canonicalize(src[only], depth + 1, true);
+      } else {
+        for (const k of ks) {
+          out[k] = canonicalize(src[k], depth + 1, true);
+        }
+      }
     }
     return out;
   }
@@ -154,9 +181,11 @@ function encodeAscii(v: Json): string {
   if (Array.isArray(v)) {
     return "[" + v.map(encodeAscii).join(",") + "]";
   }
-  // object: keys already canonical-sorted; preserve insertion order.
+  // sort_keys, matching Python json.dumps. The contract walker inserts in
+  // first-seen order; the dump is what makes ordinary objects byte-stable.
   const parts: string[] = [];
-  for (const k of Object.keys(v)) {
+  const keys = Object.keys(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const k of keys) {
     parts.push(encodeAsciiString(k) + ":" + encodeAscii(v[k]));
   }
   return "{" + parts.join(",") + "}";
@@ -198,7 +227,14 @@ function encodeAsciiString(s: string): string {
 /** THE canonical serialization — every hash site MUST use this (port of
  * `contract.canonical_bytes`). */
 export function canonicalBytes(obj: unknown): Buffer {
-  return Buffer.from(encodeAscii(canonicalize(obj, 0)), "utf-8");
+  return Buffer.from(encodeAscii(canonicalize(obj, 0, false)), "utf-8");
+}
+
+/** Tool-contract serialization. Same walker as `canonicalBytes`, plus the
+ * NFC-collision and float-shaped-string rules. Ordinary inputs match
+ * `canonicalBytes`. Objects in this walker are `Object.create(null)`. */
+export function contractBytes(obj: unknown): Buffer {
+  return Buffer.from(encodeAscii(canonicalize(obj, 0, true)), "utf-8");
 }
 
 /** The connector's per-tool hash, byte-identical to Python `_tool_hash`. The
@@ -208,7 +244,7 @@ export function toolHash(
   description: string,
   inputSchema: Record<string, unknown>,
 ): string {
-  const bytes = canonicalBytes({
+  const bytes = contractBytes({
     name,
     description,
     input_schema: inputSchema,

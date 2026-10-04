@@ -18,9 +18,11 @@ import {
 import type { PinnedTool, PreflightVerdict, ToolDef } from "./preflight.js";
 import {
   ChangeKind,
+  UndiffableError,
   classifyChange,
   isNumericOnlyDescriptionChange,
   isSafetyRelevant,
+  jsonEqual,
 } from "./schemaDiff.js";
 import type { Change } from "./schemaDiff.js";
 import { assess, blastRank } from "./risk.js";
@@ -100,6 +102,7 @@ const DANGEROUS_REASON_MARKERS: readonly string[] = [
   "injection/exfil marker",
   "could not complete",
   "DESCRIPTION changed",
+  "schema text changed",
   "behavioral validation FAILED",
   "behavioral validation UNAVAILABLE",
   "behavioral validation DECLINED",
@@ -704,6 +707,105 @@ export interface GateOptions {
   errors?: ErrorStore | null;
 }
 
+const SCHEMA_TYPE_NAMES = new Set([
+  "object",
+  "array",
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "null",
+]);
+
+export interface GateEffect {
+  kind: "repin" | "drift" | "fleet";
+  toolName: string;
+  observed?: ToolDef | null;
+  oldHash?: string;
+  newHash?: string;
+  drift?: readonly Change[];
+}
+
+function paramCarriesText(node: unknown, key?: string): boolean {
+  if (typeof node === "string") {
+    return !(key === "type" && SCHEMA_TYPE_NAMES.has(node));
+  }
+  if (Array.isArray(node)) {
+    if (key === "type") {
+      return node.some((item) => !(typeof item === "string" && SCHEMA_TYPE_NAMES.has(item)));
+    }
+    return node.some((item) => paramCarriesText(item));
+  }
+  if (node !== null && typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (paramCarriesText(v, k)) return true;
+    }
+  }
+  return false;
+}
+
+function schemaWithoutAddedParams(
+  live: Record<string, unknown>,
+  pinned: Record<string, unknown>,
+): Record<string, unknown> {
+  const liveProps = live["properties"];
+  const pinProps = pinned["properties"];
+  if (liveProps === null || typeof liveProps !== "object" || Array.isArray(liveProps)) return live;
+  const pinDict =
+    pinProps !== null && typeof pinProps === "object" && !Array.isArray(pinProps)
+      ? (pinProps as Record<string, unknown>)
+      : {};
+  const added = Object.keys(liveProps as Record<string, unknown>).filter((name) => !(name in pinDict));
+  if (added.length === 0) return live;
+  const out: Record<string, unknown> = { ...live, properties: { ...(liveProps as Record<string, unknown>) } };
+  const props = out["properties"] as Record<string, unknown>;
+  for (const name of added) delete props[name];
+  const req = out["required"];
+  if (Array.isArray(req)) {
+    const filtered = req.filter((item) => typeof item !== "string" || !added.includes(item));
+    if ("required" in pinned) out["required"] = filtered;
+    else if (filtered.length > 0) out["required"] = filtered;
+    else delete out["required"];
+  }
+  return out;
+}
+
+function schemaTextBlocks(pinnedSchema: unknown, observed: ToolDef): boolean {
+  const pinned =
+    pinnedSchema !== null && typeof pinnedSchema === "object" && !Array.isArray(pinnedSchema)
+      ? (pinnedSchema as Record<string, unknown>)
+      : {};
+  const liveIn = (observed as Record<string, unknown>)["inputSchema"];
+  const pinIn = pinned["inputSchema"];
+  const liveSchema =
+    liveIn !== null && typeof liveIn === "object" && !Array.isArray(liveIn)
+      ? (liveIn as Record<string, unknown>)
+      : {};
+  const pinSchema =
+    pinIn !== null && typeof pinIn === "object" && !Array.isArray(pinIn)
+      ? (pinIn as Record<string, unknown>)
+      : {};
+  const liveProps = liveSchema["properties"];
+  const pinProps = pinSchema["properties"];
+  const liveDict =
+    liveProps !== null && typeof liveProps === "object" && !Array.isArray(liveProps)
+      ? (liveProps as Record<string, unknown>)
+      : {};
+  const pinDict =
+    pinProps !== null && typeof pinProps === "object" && !Array.isArray(pinProps)
+      ? (pinProps as Record<string, unknown>)
+      : {};
+  for (const [name, subtree] of Object.entries(liveDict)) {
+    if (!(name in pinDict) && paramCarriesText(subtree)) return true;
+  }
+  try {
+    return !jsonEqual(schemaWithoutAddedParams(liveSchema, pinSchema), pinSchema);
+  } catch (exc) {
+    if (exc instanceof UndiffableError) return true;
+    throw exc;
+  }
+}
+
 export class Gate {
   private readonly pin: PreflightPin;
   private readonly _serverId: string;
@@ -786,16 +888,58 @@ export class Gate {
    * null when the live definition is unavailable or the flag is off. Mirrors the
    * Python wrapper's `build_action_classification`. */
   evaluate(name: string, observed: ToolDef | null): PreflightVerdict {
-    const verdict = this.decideContract(name, observed);
-    const ac = classifyToolDef(name, observed);
-    const withAc = ac === null ? verdict : { ...verdict, actionClassification: ac };
-    // M3 fleet advisory — if the fleet has corroborated drift for this tool (prefetched at
-    // observe time), attach it. Sync cache read; AD-6-safe (never moves PROCEED/HOLD).
-    const adv = driftQuery.lookup(this._serverId, name);
-    return adv === null ? withAc : { ...withAc, fleetAdvisory: adv };
+    const [verdict, effects] = this.collect(name, observed);
+    const [withSideEffects] = this.commit(verdict, effects);
+    return withSideEffects;
   }
 
-  private decideContract(name: string, observed: ToolDef | null): PreflightVerdict {
+  /** `(static, effective, effects)` with no pin write, telemetry send, or fleet read. */
+  assess(
+    name: string,
+    observed: ToolDef | null,
+  ): [PreflightVerdict, PreflightVerdict, GateEffect[]] {
+    const [staticVerdict, effects] = this.collect(name, observed);
+    return [staticVerdict, this.applyPosture(staticVerdict), effects];
+  }
+
+  /** Run effects, then re-apply posture so the fleet advisory rides as `evaluate` did. */
+  commit(stat: PreflightVerdict, effects: readonly GateEffect[]): [PreflightVerdict, PreflightVerdict] {
+    let staticVerdict = stat;
+    for (const effect of effects) {
+      if (effect.kind === "repin" && effect.observed != null) {
+        this.repinOne(effect.toolName, effect.observed);
+      } else if (effect.kind === "drift") {
+        driftTelemetry.recordDrift(
+          this._serverId,
+          effect.toolName,
+          effect.oldHash ?? "",
+          effect.newHash ?? "",
+          effect.drift ?? [],
+          this.now(),
+        );
+      }
+    }
+    if (effects.some((effect) => effect.kind === "fleet")) {
+      const adv = driftQuery.lookup(this._serverId, staticVerdict.toolName);
+      if (adv !== null) staticVerdict = { ...staticVerdict, fleetAdvisory: adv };
+    }
+    return [staticVerdict, this.applyPosture(staticVerdict)];
+  }
+
+  private collect(name: string, observed: ToolDef | null): [PreflightVerdict, GateEffect[]] {
+    const effects: GateEffect[] = [];
+    let verdict = this.decideContract(name, observed, effects);
+    const ac = classifyToolDef(name, observed);
+    if (ac !== null) verdict = { ...verdict, actionClassification: ac };
+    effects.push({ kind: "fleet", toolName: name });
+    return [verdict, effects];
+  }
+
+  private decideContract(
+    name: string,
+    observed: ToolDef | null,
+    effects: GateEffect[],
+  ): PreflightVerdict {
     const pinned = this.pin.get(this._serverId, name);
     if (pinned === null) {
       return this.holdOrFailopen(
@@ -832,15 +976,14 @@ export class Gate {
 
     // The canonical hash CHANGED — a real contract drift. Decide the verdict, then emit the
     // M1 drift telemetry OUTCOME signal (off-path, fail-open: it can never move the verdict).
-    const verdict = this.validateDrift(name, pinned, observed);
-    driftTelemetry.recordDrift(
-      this._serverId,
-      name,
-      pinned.definitionHash,
-      liveHash,
-      verdict.drift,
-      this.now(),
-    );
+    const verdict = this.validateDrift(name, pinned, observed, effects);
+    effects.push({
+      kind: "drift",
+      toolName: name,
+      oldHash: pinned.definitionHash,
+      newHash: liveHash,
+      drift: verdict.drift,
+    });
     return verdict;
   }
 
@@ -893,18 +1036,46 @@ export class Gate {
     }
 
     if (pinned.schema === null) return null;
+    const pinnedRec = pinned.schema as Record<string, unknown>;
+    const observedRec = observed as Record<string, unknown>;
+    try {
+      const sameUnhashed =
+        jsonEqual(pinnedRec["annotations"], observedRec["annotations"]) &&
+        jsonEqual(pinnedRec["outputSchema"], observedRec["outputSchema"]);
+      if (sameUnhashed) return null;
+    } catch (exc) {
+      if (exc instanceof UndiffableError) {
+        return this.driftHold(
+          pinned.toolName,
+          [],
+          "annotations or outputSchema comparison could not complete; fail-closed HOLD",
+          "finding",
+        );
+      }
+      throw exc;
+    }
     let drift: Change[];
     try {
       drift = this.classifyDrift(pinned, observed);
     } catch {
-      return null;
+      return this.driftHold(
+        pinned.toolName,
+        [],
+        "unhashed contract classification could not complete; fail-closed HOLD",
+        "finding",
+      );
     }
     const mandated = drift.filter((c) => this.behavioralMandatedKinds.has(c.kind)).map((c) => c.kind.toString());
     if (mandated.length === 0) return null;
     return this.behavioralInconclusive(pinned.toolName, drift, mandated);
   }
 
-  private validateDrift(name: string, pinned: PinnedTool, observed: ToolDef): PreflightVerdict {
+  private validateDrift(
+    name: string,
+    pinned: PinnedTool,
+    observed: ToolDef,
+    effects: GateEffect[] | null = null,
+  ): PreflightVerdict {
     let drift: Change[];
     try {
       drift = this.classifyDrift(pinned, observed);
@@ -1007,7 +1178,20 @@ export class Gate {
       );
     }
 
-    this.repinOne(name, observed);
+    if (schemaTextBlocks(pinned.schema, observed)) {
+      return this.driftHold(
+        name,
+        drift,
+        "contract DRIFTED: schema text changed (an added parameter carries text, or the input schema is not the pinned schema once added parameters are removed)",
+        HoldClass.DRIFT,
+      );
+    }
+
+    if (effects !== null) {
+      effects.push({ kind: "repin", toolName: name, observed });
+    } else {
+      this.repinOne(name, observed);
+    }
     return makeVerdict({
       serverId: this._serverId,
       toolName: name,
@@ -1146,9 +1330,8 @@ export class Gate {
 
   decide(name: string, observed: ToolDef | null): [PreflightVerdict, PreflightVerdict] {
     try {
-      const stat = this.evaluate(name, observed);
-      const eff = this.applyPosture(stat);
-      return [stat, eff];
+      const [stat, , effects] = this.assess(name, observed);
+      return this.commit(stat, effects);
     } catch (exc) {
       this.captureError(exc, Operation.GATE_DECISION, "gate.decide");
       const verdict = this.internalErrorVerdict(name);
