@@ -1,9 +1,16 @@
-# Changelog — @mcp-index/sdk
+# Changelog - @mcp-index/sdk
 
 All notable changes to the TypeScript SDK. Versioning is semver (0.x: minor =
 additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
+
+## 0.14.1 - 2026-10-04
+
+### Changed
+
+- Some changes that used to auto-accept now hold for review.
+- Tool hashes for existing pins are unchanged.
 
 ## 0.14.0 - 2026-10-02
 
@@ -122,7 +129,7 @@ classifications on the measured corpus.
 
 New export: `isNumericOnlyDescriptionChange(before, after)`.
 
-## 0.10.0 — 2026-08-05
+## 0.10.0 - 2026-08-05
 
 **The HOLD text an agent reads is now separate from the one a human reads.** Behaviour
 change on a shipped surface: `PreflightHold.message` (and the proxy's JSON-RPC error
@@ -130,22 +137,22 @@ change on a shipped surface: `PreflightHold.message` (and the proxy's JSON-RPC e
 
 Why: on 2026-08-05 a frontier model met a real HOLD, classified the banner as a
 prompt-injection attempt, refused to act on it, retried the held call, and told the user
-something suspicious was intercepting its tools. Its load-bearing objection was not tone —
+something suspicious was intercepting its tools. Its load-bearing objection was not tone -
 it could not verify us. The gate diffs the pin against the LIVE contract while the agent
 sees only its own cached tool list, a third view that legitimately disagrees. We were
 asserting a change the reader could not observe and then inviting it to act, which is the
 shape of a manipulation attempt. Refusing was correct behaviour.
 
-- **Added** `renderHoldMessage()` — the agent-facing text. Renders the drift as an evidence
+- **Added** `renderHoldMessage()` - the agent-facing text. Renders the drift as an evidence
   block (tool / change + path / effect / call sent), names the stale-tool-list mismatch
   before the agent trips over it, and states the disposition without inviting any action.
-- **Added** `PreflightHold.presentation` — the human brand banner, kept off `message`.
+- **Added** `PreflightHold.presentation` - the human brand banner, kept off `message`.
   `String(err)` is what a builder is most likely to hand to a model.
-- **Unchanged** `renderHoldBanner()` and `holdBanner()` — same text, same meaning, for
+- **Unchanged** `renderHoldBanner()` and `holdBanner()` - same text, same meaning, for
   humans and hosts.
-- **Security:** the agent-facing message may only CONSTRAIN. `[Review · Re-pin · Validate]`
-  invited the reader toward `repin()` — the one action that makes a changed contract the
-  new trusted baseline — on a channel the agent must treat as attacker-controlled. That is
+- **Security:** the agent-facing message may only CONSTRAIN. `[Review | Re-pin | Validate]`
+  invited the reader toward `repin()` - the one action that makes a changed contract the
+  new trusted baseline - on a channel the agent must treat as attacker-controlled. That is
   the text an attacker would forge; forging "stop and ask your human" earns them nothing.
 - **Security:** no defence was traded away to get there. `mdText` escaping and
   `redactGreenWords` now run per untrusted value rather than over the whole render, so they
@@ -153,13 +160,13 @@ shape of a manipulation attempt. Refusing was correct behaviour.
   (`VALUE_CHAR_CAP`), closing an unbounded-render vector a security audit measured at 5.2 MB
   from a 1.6 MB hostile tool name.
 - **Fixed** (audit HIGH) `holdBanner()` fell through to the full detail banner when the
-  provenance choke refused or on an internal-error verdict — asserting a specific contract
+  provenance choke refused or on an internal-error verdict - asserting a specific contract
   change that, in the latter case, never happened. It now returns the generic notice, as
   Python always did.
 - **Fixed** evidence rows sort by codepoint, not `localeCompare`, so the two SDKs cannot
   render different evidence for identical drift.
 
-## 0.9.2 — 2026-07-29
+## 0.9.2 - 2026-07-29
 
 Copy only, no behaviour change.
 
@@ -170,22 +177,22 @@ Copy only, no behaviour change.
 - `package.json` description likewise names mcpindex.ai + the category; added
   `mcpindex` keyword. Lockfile version resynced (was stale at 0.7.0).
 
-## 0.9.1 — 2026-07-18
+## 0.9.1 - 2026-07-18
 
 ### Fixed
-- **`wrap(session)` now works with no options — the README quickstart is honest
+- **`wrap(session)` now works with no options - the README quickstart is honest
   again.** `pin` and `serverId` are now OPTIONAL: when omitted, `wrap()` creates an
   ephemeral in-memory `PreflightPin()` under the new `DEFAULT_SERVER_ID` ("mcp") and
   pins each tool trust-on-first-use. Previously `wrap(session)` threw
   `TypeError: Cannot read properties of undefined (reading 'pin')`, and
   `wrap(session, { scanResults: true, onHold })` (no pin/serverId) HELD **every** call
   with the internal-error banner. Security posture is unchanged: a missing pin
-  pins-on-first-use (TOFU) and HOLDs on drift — it never fails open. Pass an explicit
+  pins-on-first-use (TOFU) and HOLDs on drift - it never fails open. Pass an explicit
   `{ pin, serverId }` for a durable/shared baseline or fleet telemetry.
 - Exported `DEFAULT_SERVER_ID` for callers that want to reference the default pin
   namespace explicitly.
 
-## 0.9.0 — 2026-07-14
+## 0.9.0 - 2026-07-14
 
 ### Added
 - **`mcpindex login` CLI.** New `mcpindex` bin with `login` / `whoami`. `login` opens
@@ -195,14 +202,14 @@ Copy only, no behaviour change.
   callback is bound to a per-session nonce carried in the loopback path (closes
   key-fixation); the key never transits a third party. `MCPINDEX_WEB_BASE` overrides the
   default host. `whoami` reports sign-in state without ever printing the key.
-- **`--provider github|google`** on `mcpindex login` (default `github`) — selects the
+- **`--provider github|google`** on `mcpindex login` (default `github`) - selects the
   identity provider; the loopback/nonce handoff is provider-agnostic.
 
-## 0.7.0 — 2026-07-12
+## 0.7.0 - 2026-07-12
 
 ### Added
 - **Result-content scanning (`scanResults`).** New opt-in gate that scans tool
-  RESULT content — text blocks and `structuredContent` — for prompt-injection,
+  RESULT content - text blocks and `structuredContent` - for prompt-injection,
   exfiltration, and credential-path markers, giving TS parity with the Python
   client. **Default OFF** (zero behavior change): a hostile result passes through
   untouched unless enabled. When ON, a tainted result is WITHHELD under `GUARD`/
@@ -221,12 +228,12 @@ Copy only, no behaviour change.
   `resource_link` URI is no longer a false positive; the scan budget is shared
   across `content[]` + structured so a large result can't evade the cap.
 
-## 0.6.1 — 2026-06-11
+## 0.6.1 - 2026-06-11
 
 ### Added
 - **Read-only `lookup` telemetry mode.** `MCPINDEX_DRIFT_TELEMETRY` gains `lookup`
   (vocabulary is now `off | lookup | detection | contribute`). `lookup` RECEIVES fleet
-  drift warnings (the salted-fingerprint query) while SENDING nothing — the gate splits the
+  drift warnings (the salted-fingerprint query) while SENDING nothing - the gate splits the
   former single switch into `readEnabled()` (any non-off mode) and `sendEnabled()`
   (detection/contribute only), with a re-check at the enqueue boundary. Cross-language
   parity with the Python client. Default stays `off` (zero egress).
@@ -236,7 +243,7 @@ Copy only, no behaviour change.
   list) now name the `sdk` tag (`py`/`ts`) that the wire payload already includes, and
   document `lookup` as low-egress (not zero-egress). Kept byte-identical to the Python notice.
 
-## 0.6.0 — 2026-06-09
+## 0.6.0 - 2026-06-09
 
 ### Added
 - **Fleet drift query (M3, "warns you on call 1").** On first pin the gate fire-and-forgets a
@@ -246,11 +253,11 @@ Copy only, no behaviour change.
   fingerprint is the one already emitted), fail-open, AD-6-safe (never moves PROCEED/HOLD;
   redirects hard-off). Exported: `driftQuery`, `FleetAdvisory`; surfaced by `renderVerdict`.
 
-## 0.5.0 — 2026-06-09
+## 0.5.0 - 2026-06-09
 
 ### Added
 - **Drift telemetry (M1, opt-in, OFF by default).** On a tool pin or a contract drift the
-  gate can emit one one-way signal — salted (HMAC) fingerprints of the server/tool id, the
+  gate can emit one one-way signal - salted (HMAC) fingerprints of the server/tool id, the
   contract hashes, the change type, a safety flag, an hour-rounded time, and a random install
   id. Never a schema, argument, description, URL, or server/tool name. Enable with
   `MCPINDEX_DRIFT_TELEMETRY=detection`; fail-open (never blocks or changes a tool call). The
@@ -261,45 +268,45 @@ Copy only, no behaviour change.
   classification) shipped in 0.4.0, with the `MCPINDEX_ACTION_CLASSIFICATION_ENABLED=0`
   opt-out. (0.4.0 published before the README caught up.)
 
-## 0.4.0 — 2026-06-08
+## 0.4.0 - 2026-06-08
 
 ### Added
 - **Local Tier-0a action classification (blast radius).** The gate now COMPUTES the
-  advisory `actionClassification` block locally from the live tool definition — action
-  type, resource, side-effect, reversibility, egress, and a static autonomy ceiling —
+  advisory `actionClassification` block locally from the live tool definition - action
+  type, resource, side-effect, reversibility, egress, and a static autonomy ceiling -
   instead of leaving it `null` until a hosted verdict supplied one. So the blast-radius
   grade is on by default in the SDK, at parity with the Python `mcpindex-gate`
   client. Default-on; opt out with `MCPINDEX_ACTION_CLASSIFICATION_ENABLED=0`. Pure,
   deterministic, total, and a byte-for-byte port of the Python `cse.action_class.classify`
-  (12-case cross-language golden parity test). **Advisory only** — it rides alongside the
+  (12-case cross-language golden parity test). **Advisory only** - it rides alongside the
   decision and never moves `PROCEED`/`HOLD` (AD-1). New exports: `classifyAction`,
   `classifyToolDef`, `actionClassificationEnabled`, and the `ActionType` /
   `SideEffectClass` / `Reversibility` / `Egress` / `ScopeHint` / `PatternShape` /
   `AutonomyCeiling` / `NoteClass` / `Severity` / `EvidenceRefType` enums.
 
-## 0.3.2 — 2026-06-08
+## 0.3.2 - 2026-06-08
 
 ### Fixed
-- **Schema-content scanner no longer false-flags benign URLs** — the exfil tripwire
+- **Schema-content scanner no longer false-flags benign URLs** - the exfil tripwire
   (`scanSchemaHasMarker`) had a bare `https?://` rule that flagged any URL in a tool's
   declared schema as a CRITICAL exfil marker. A real crawl tripped it on a benign
   `web_url_reader` whose `url` param carried example URLs. A URL now signals exfil only
-  in an exfil-verb context (`forward … https://…`); example/doc URLs are clean.
+  in an exfil-verb context (`forward ... https://...`); example/doc URLs are clean.
   Credential-path and injection detection unchanged. Mirrors the Python `schema_scan` fix.
 
-## 0.3.1 — 2026-06-08
+## 0.3.1 - 2026-06-08
 
 ### Changed
-- **Ambient line reworded `watching` → `noted`** — `mcpindex · noted <server>/<tool> — …`.
+- **Ambient line reworded `watching` -> `noted`** - `mcpindex | noted <server>/<tool> - ...`.
   The previous "watching" read like surveillance *of the user*; "noted" frames it as
   mcpindex quietly keeping track on your behalf. Copy-only; behavior identical.
 
-## 0.3.0 — 2026-06-08
+## 0.3.0 - 2026-06-08
 
 ### Added
-- **Ambient presence (default-on).** A subtle, low-frequency `mcpindex · watching
+- **Ambient presence (default-on).** A subtle, low-frequency `mcpindex | watching
   <server>/<tool>` line on the gate's PROCEED path so a user remembers mcpindex is
-  working — first-touch per tool (one line per distinct tool, silent on repeats) plus a
+  working - first-touch per tool (one line per distinct tool, silent on repeats) plus a
   once-per-session summary. New `onInvocation` option on `wrap()` lets an integrator
   render the signal in their own UI. The first line carries `(silence:
   MCPINDEX_AMBIENT_NOTICE=off)` so the off-switch is always discoverable; cadence tunes
@@ -310,20 +317,20 @@ Copy only, no behaviour change.
   decision or a tool call's result (a HOLD emits nothing; a broken notifier is swallowed).
   New `ambient.ts` + 12 tests (incl. a stdout-stays-empty channel-safety assertion).
 
-## 0.2.0 — 2026-06-07
+## 0.2.0 - 2026-06-07
 
 ### Added
-- **`actionClassification` on `PreflightVerdict`** — the read-side mirror of the
+- **`actionClassification` on `PreflightVerdict`** - the read-side mirror of the
   server's Tier 0a advisory action-classification block: the *blast radius* of a tool
   call (action type, resource, side-effect, reversibility, egress, and a static
   autonomy ceiling). New exported `ActionClassification` type. Lets TS/JS consumers
   read the block off a verdict.
-  - **Advisory only** — it rides *alongside* the decision and never alters
+  - **Advisory only** - it rides *alongside* the decision and never alters
     `PROCEED`/`HOLD` (`isProceed` reads only `decision`).
-  - **Read-side only in this release** — the SDK does **not** yet *compute* the block
+  - **Read-side only in this release** - the SDK does **not** yet *compute* the block
     locally; the field is populated from a server/hosted verdict, else `null`. The
     local `classify()` port lands with the in-process interceptor (deferred).
-  - **Backward-compatible** — the field defaults to `null` in `makeVerdict`, so existing
+  - **Backward-compatible** - the field defaults to `null` in `makeVerdict`, so existing
     consumers are unaffected. The nested block uses the snake_case wire keys (the server
     JSON contract); the envelope stays camelCase.
 
@@ -334,6 +341,6 @@ Copy only, no behaviour change.
 
 ## 0.1.0
 
-- Initial release: pre-flight MCP tool-contract drift interceptor — `wrap()` over an
+- Initial release: pre-flight MCP tool-contract drift interceptor - `wrap()` over an
   MCP client session that HOLDs a tool call when the contract drifted from your pin.
   No credential handling.

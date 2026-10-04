@@ -8,8 +8,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { hashTool } from "../src/canonical.js";
+import { canonicalBytes, contractBytes, hashTool } from "../src/canonical.js";
 import { classifyChange, ChangeKind } from "../src/schemaDiff.js";
 import { Gate, Posture, Ownership } from "../src/gate.js";
 import { PreflightPin, Decision, ToolDef } from "../src/preflight.js";
@@ -354,4 +357,36 @@ test("actionClassification: defaults to null (backward-compat) and never alters 
   assert.equal(held.actionClassification?.effective_action_type, "delete");
   assert.equal(held.decision, Decision.HOLD);
   assert.equal(isProceed(held), false); // a high-blast advisory block did not flip HOLD
+});
+
+test("contract bytes match the Python fixture, including proto keys", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const raw = readFileSync(join(here, "../../test/fixtures/contract-bytes.json"), "utf8");
+  const rows = JSON.parse(raw) as Array<{
+    name: string;
+    input: unknown;
+    canonical: string;
+    contract: string;
+  }>;
+  assert.equal(rows.length, 11);
+  for (const row of rows) {
+    assert.equal(
+      contractBytes(row.input).toString("utf8"),
+      row.contract,
+      row.name,
+    );
+    if (!row.name.includes("proto") && row.canonical === row.contract) {
+      assert.equal(
+        canonicalBytes(row.input).toString("utf8"),
+        row.canonical,
+        row.name,
+      );
+    }
+  }
+  const proto = rows.find((row) => row.name === "proto-under-properties");
+  assert.ok(proto);
+  assert.notEqual(
+    canonicalBytes(proto.input).toString("utf8"),
+    contractBytes(proto.input).toString("utf8"),
+  );
 });

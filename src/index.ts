@@ -44,7 +44,7 @@ export type { BehavioralVerifier, BehavioralResult, GateOptions } from "./gate.j
 export { ChangeKind, classifyChange, isSafetyRelevant, MAX_DEPTH } from "./schemaDiff.js";
 export type { Change } from "./schemaDiff.js";
 
-export { canonicalBytes, toolHash } from "./canonical.js";
+export { canonicalBytes, contractBytes, toolHash } from "./canonical.js";
 
 export { assess, BlastRadius, DomainClass, blastRank } from "./risk.js";
 export type { RiskAssessment } from "./risk.js";

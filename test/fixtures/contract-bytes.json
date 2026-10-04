@@ -1,0 +1,102 @@
+[
+  {
+    "name": "plain",
+    "input": {
+      "a": 1,
+      "b": "c"
+    },
+    "canonical": "{\"a\":1,\"b\":\"c\"}",
+    "contract": "{\"a\":1,\"b\":\"c\"}"
+  },
+  {
+    "name": "nfc-single",
+    "input": {
+      "\u00e9": 1
+    },
+    "canonical": "{\"\\u00e9\":1}",
+    "contract": "{\"\\u00e9\":1}"
+  },
+  {
+    "name": "nfc-collision",
+    "input": {
+      "\u00e9": 1,
+      "e\u0301": 2
+    },
+    "canonical": "{\"\\u00e9\":1}",
+    "contract": "{\"e\\u0301\":2,\"\\u00e9\":1}"
+  },
+  {
+    "name": "float",
+    "input": {
+      "n": 0.5
+    },
+    "canonical": "{\"n\":\"5.00000000000000000e-01\"}",
+    "contract": "{\"n\":\"5.00000000000000000e-01\"}"
+  },
+  {
+    "name": "floatish-string",
+    "input": {
+      "s": "5.00000000000000000e-01"
+    },
+    "canonical": "{\"s\":\"5.00000000000000000e-01\"}",
+    "contract": "{\"s\":\"\\u00005.00000000000000000e-01\"}"
+  },
+  {
+    "name": "nul-string",
+    "input": {
+      "s": "\u0000abc"
+    },
+    "canonical": "{\"s\":\"\\u0000abc\"}",
+    "contract": "{\"s\":\"\\u0000\\u0000abc\"}"
+  },
+  {
+    "name": "three-digit-exponent",
+    "input": {
+      "s": "1.00000000000000000e+100"
+    },
+    "canonical": "{\"s\":\"1.00000000000000000e+100\"}",
+    "contract": "{\"s\":\"\\u00001.00000000000000000e+100\"}"
+  },
+  {
+    "name": "unicode-digits",
+    "input": {
+      "s": "\u0661.00000000000000000e+00"
+    },
+    "canonical": "{\"s\":\"\\u0661.00000000000000000e+00\"}",
+    "contract": "{\"s\":\"\\u0661.00000000000000000e+00\"}"
+  },
+  {
+    "name": "trailing-newline",
+    "input": {
+      "s": "5.00000000000000000e-01\n"
+    },
+    "canonical": "{\"s\":\"5.00000000000000000e-01\\n\"}",
+    "contract": "{\"s\":\"5.00000000000000000e-01\\n\"}"
+  },
+  {
+    "name": "proto-under-properties",
+    "input": {
+      "properties": {
+        "name": {
+          "__proto__": {
+            "x": 1
+          }
+        }
+      }
+    },
+    "canonical": "{\"properties\":{\"name\":{\"__proto__\":{\"x\":1}}}}",
+    "contract": "{\"properties\":{\"name\":{\"__proto__\":{\"x\":1}}}}"
+  },
+  {
+    "name": "defs-proto",
+    "input": {
+      "$defs": {
+        "__proto__": {
+          "type": "object"
+        }
+      }
+    },
+    "canonical": "{\"$defs\":{\"__proto__\":{\"type\":\"object\"}}}",
+    "contract": "{\"$defs\":{\"__proto__\":{\"type\":\"object\"}}}"
+  }
+]
