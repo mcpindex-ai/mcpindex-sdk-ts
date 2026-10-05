@@ -5,6 +5,17 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.15.0 - 2026-10-05
+
+### Changed
+
+- Under guard and strict, a tool whose description or input-schema text changed is left out of the tool list, and a call to that tool holds until it is reviewed.
+- Monitor still shows the full list.
+- Pins are kept on disk by default, under `MCPINDEX_STATE_DIR/pins/<server id>.json` or `~/.mcpindex/pins/<server id>.json`. Pass `pinStore: "memory"` for a store that dies with the process.
+- These fields are not yet covered, so a change in only one of them still reaches the host: tool title, icons, _meta, annotations.title, a new annotation key, and first-time outputSchema text on an otherwise unchanged tool.
+- The SDK client's listChanged refresh calls the inner client, so that refresh is not filtered.
+- A list longer than 2,000 tools, or a list the gate cannot filter, comes back with every tool left out. It does not throw.
+
 ## 0.14.1 - 2026-10-04
 
 ### Changed

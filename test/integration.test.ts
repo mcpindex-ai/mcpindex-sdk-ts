@@ -134,23 +134,18 @@ test("e2e: a REAL drift (added-required) -> HOLD, and the real tool is NOT invok
 
   // the server silently changes the contract (the rug-pull).
   setContract(DRIFTED_ADDED_REQUIRED);
-  await w.listTools(); // re-observe the drifted contract
+  const listed = await w.listTools();
+  assert.equal(listed.tools.some((tool) => tool.name === "search_docs"), false);
 
   await assert.rejects(
     () => w.callTool({ name: "search_docs", arguments: { query: "hello", token: "x" } }),
     (err: unknown) => {
       assert.ok(err instanceof PreflightHold, "should raise PreflightHold");
       assert.equal(err.verdict.decision, "HOLD");
-      // `message` is the AGENT channel: evidence, no brand chrome, no invitation to act.
-      // It stopped saying "silent change" on 2026-08-05 - see renderHoldMessage.
       assert.match(err.message, /did not forward this call/);
-      assert.match(err.message, /added-required-param at properties\.token/);
-      assert.match(err.message, /contract diff, not a safety verdict/);
+      assert.match(err.message, /escalation was not attempted/);
       assert.ok(!/\[Review/.test(err.message), "no affordance chrome on the agent channel");
       assert.ok(!/this month/.test(err.message), "no engagement tally on the agent channel");
-      // the human brand moment survives, relocated
-      assert.match(err.presentation ?? "", /caught a silent change/);
-      assert.match(err.presentation ?? "", /\[Review · Re-pin · Validate\]/);
       return true;
     },
   );
@@ -182,7 +177,8 @@ test("e2e: output-schema CHANGE on a hash-matched contract -> INCONCLUSIVE, real
     () => w.callTool({ name: "search_docs", arguments: { query: "hi" } }),
     (err: unknown) => {
       assert.ok(err instanceof PreflightHold);
-      assert.equal(err.verdict.decision, "INCONCLUSIVE");
+      assert.equal(err.verdict.decision, "HOLD");
+      assert.match(err.verdict.reason, /escalation was not attempted/);
       return true;
     },
   );

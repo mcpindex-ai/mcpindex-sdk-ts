@@ -5,6 +5,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+if [ -z "${MCPINDEX_STATE_DIR:-}" ]; then
+  export MCPINDEX_STATE_DIR="${TMPDIR:-/tmp}/mcpindex-sdk-ci-$$"
+  mkdir -p "$MCPINDEX_STATE_DIR"
+fi
+
 echo "SKIP test/crossLangParity.test.ts"
 echo "  Four tests import live Python (trust.result_scan, trust.schema_scan, tooling.cse.schema_diff, tooling.cse.gate) via uv."
 echo "  This repo has no such tree: ModuleNotFoundError. They run in mcpindex-trust."
