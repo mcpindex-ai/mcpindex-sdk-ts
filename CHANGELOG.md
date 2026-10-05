@@ -18,6 +18,10 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## 0.14.1 - 2026-10-04
 
+### Security
+
+- Fixes GHSA-g737-65vx-q7qm (https://github.com/mcpindex-ai/mcpindex-sdk-ts/security/advisories/GHSA-g737-65vx-q7qm), cases where a changed tool contract was treated as unchanged or auto-accepted. Affected: @mcp-index/sdk < 0.14.1 and mcpindex-gate < 0.16.1.
+
 ### Changed
 
 - Some changes that used to auto-accept now hold for review.
