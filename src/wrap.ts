@@ -39,7 +39,14 @@ import {
   behaviourObserved,
 } from "./gate.js";
 import type { BehavioralVerifier } from "./gate.js";
-import { Decision, HoldClass, PreflightPin, makeVerdict, utcNowIso } from "./preflight.js";
+import { Decision, HoldClass, PreflightPin, defaultPinStorePath, makeVerdict, utcNowIso } from "./preflight.js";
+import {
+  MAX_LISTED_TOOLS,
+  WITHHELD_CALL_REASON,
+  filterListing,
+  rawToolEntries,
+  replaceToolList,
+} from "./listingFilter.js";
 import type { PinnedTool, PreflightVerdict, ToolDef } from "./preflight.js";
 import { scanResult } from "./scan.js";
 import type { ResultScan } from "./scan.js";
@@ -97,11 +104,17 @@ export class PreflightHold extends Error {
 export const DEFAULT_SERVER_ID = "mcp";
 
 export interface WrapOptions {
-  /** The pin store the tools are checked against. Optional: when omitted, an
-   * EPHEMERAL in-memory `PreflightPin()` is created — it pins each tool's contract
-   * trust-on-first-use (TOFU) and catches drift within the session (never
-   * fail-open). Pass your own `PreflightPin` to share/persist a baseline. */
+  /** The pin store the tools are checked against. Optional: when omitted and a
+   * `serverId` is given, pins are kept in a file under the state directory and
+   * survive a process restart. With no `serverId` the default stays in memory.
+   * Pass `pinStore: "memory"` for a store that dies with the process, or pass
+   * your own `PreflightPin`. */
   pin?: PreflightPin;
+  /** `"memory"` keeps pins in this process only. `"file"` forces the file store
+   * even without a `serverId`. The default is a file when `serverId` is set. */
+  pinStore?: "memory" | "file";
+  /** Called when a tool is left out of a list: server id, tool, reason, live hash. */
+  onWithheld?: ((serverId: string, tool: string, reason: string, definitionHash: string) => void) | null;
   /** Logical id the tools are pinned under. Optional: defaults to
    * `DEFAULT_SERVER_ID` ("mcp"), which is correct for the ephemeral in-memory
    * baseline. Pass a stable id when you persist pins or opt into fleet telemetry. */
@@ -246,6 +259,35 @@ function requestMethodAndTool(request: unknown): [string | null, string] {
   }
 }
 
+function cursorOfList(args: unknown[]): string | null {
+  const first = args[0];
+  if (first !== null && typeof first === "object" && "cursor" in first) {
+    return cursorText((first as { cursor?: unknown }).cursor);
+  }
+  return null;
+}
+
+function cursorOfRequest(request: unknown): string | null {
+  if (request === null || typeof request !== "object") return null;
+  const params = (request as { params?: unknown }).params;
+  if (params === null || typeof params !== "object") return null;
+  return cursorText((params as { cursor?: unknown }).cursor);
+}
+
+function cursorText(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function carriesTools(result: unknown): boolean {
+  if (result === null || typeof result !== "object") return false;
+  const obj = result as Record<string, unknown>;
+  const inner = obj["result"];
+  if (inner !== null && typeof inner === "object" && !Array.isArray(inner)) {
+    return "tools" in inner;
+  }
+  return "tools" in obj;
+}
+
 function isThenable(v: unknown): v is Promise<unknown> {
   return v !== null && typeof v === "object" && typeof (v as { then?: unknown }).then === "function";
 }
@@ -269,6 +311,9 @@ class Interceptor {
   // rides stderr + the optional observer only. See `noteAmbient`.
   private readonly ambient: AmbientNotifier;
   private readonly observed = new Map<string, ToolDef>();
+  private readonly withheldNames = new Set<string>();
+  private listingNames = new Set<string>();
+  private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
   // The tier the LAST gated call for a tool ACTUALLY reached, for its provenance (mirrors the
   // Python wrapper's `_last_tier_reached`). AUDIT-LOW FLOOR FIX: tier_reached reflects what
@@ -280,12 +325,11 @@ class Interceptor {
     readonly session: SessionLike,
     opts: WrapOptions,
   ) {
+    this.onWithheld = opts.onWithheld ?? null;
     this.gate = new Gate({
-      // Default to an EPHEMERAL in-memory TOFU baseline when the caller passes no
-      // pin/serverId — so `wrap(session)` works as the quickstart promises: pin on
-      // first use, HOLD on drift, NEVER fail-open. Security posture is preserved: a
-      // fresh empty pin pins-on-first-observe (Gate.observe), it does not fail open.
-      pin: opts.pin ?? new PreflightPin(),
+      // With a serverId the default pin is a file under the state directory; without
+      // one it stays in memory (see defaultPin). A fresh pin still pins on first observe.
+      pin: opts.pin ?? this.defaultPin(opts),
       serverId: opts.serverId ?? DEFAULT_SERVER_ID,
       failOpen: opts.failOpen,
       autoAcceptBenign: opts.autoAcceptBenign,
@@ -336,17 +380,67 @@ class Interceptor {
     }
   }
 
+  private defaultPin(opts: WrapOptions): PreflightPin {
+    if (opts.pinStore === "memory") return new PreflightPin();
+    // Without a serverId every wrapped session would share one file under the
+    // DEFAULT_SERVER_ID namespace, and two servers that both expose a tool named
+    // `search` would collide. Keep that case in memory unless the caller opts in.
+    if (opts.serverId === undefined && opts.pinStore !== "file") return new PreflightPin();
+    return new PreflightPin(defaultPinStorePath(opts.serverId ?? DEFAULT_SERVER_ID));
+  }
+
   // ------------------------------------------------------------- list_tools
+  // The SDK client's listChanged handler calls listTools on the inner client,
+  // so that refresh is not filtered here.
   listTools(target: SessionLike, args: unknown[]): unknown {
+    const window = this.openListingWindow(cursorOfList(args));
     const result = (target.listTools as AnyFn).apply(target, args);
-    if (isThenable(result)) {
-      return result.then((r) => {
-        this.observe(r);
-        return r;
-      });
+    if (isThenable(result)) return result.then((r) => this.filterList(r, window));
+    return this.filterList(result, window);
+  }
+
+  private openListingWindow(cursor: string | null): Set<string> {
+    if (cursor === null) this.listingNames = new Set();
+    return this.listingNames;
+  }
+
+  private filterList(result: unknown, window: Set<string>): unknown {
+    try {
+      if (!carriesTools(result)) return result;
+      const raw = rawToolEntries(result);
+      if (raw.length > MAX_LISTED_TOOLS) {
+        this.gate.captureError(new Error("listing over cap"), Operation.LIST_TOOLS, "wrap.listTools");
+        return replaceToolList(result, []);
+      }
+      this.observe(result);
+      if (this.gate.posture === Posture.MONITOR) return result;
+      const outcome = filterListing(this.gate, raw, window);
+      this.emitWithheld(outcome.withheld);
+      if (outcome.kept.length === raw.length && outcome.kept.every((entry, i) => entry === raw[i])) {
+        return result;
+      }
+      return replaceToolList(result, outcome.kept);
+    } catch (exc) {
+      this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.listTools");
+      try {
+        return replaceToolList(result, []);
+      } catch (second) {
+        this.gate.captureError(second, Operation.LIST_TOOLS, "wrap.listTools");
+        return { tools: [] };
+      }
     }
-    this.observe(result);
-    return result;
+  }
+
+  private emitWithheld(notices: { serverId: string; toolName: string; reason: string; definitionHash: string }[]): void {
+    for (const notice of notices) {
+      this.withheldNames.add(notice.toolName);
+      if (this.onWithheld == null) continue;
+      try {
+        this.onWithheld(notice.serverId, notice.toolName, notice.reason, notice.definitionHash);
+      } catch {
+        // a hook must not break the list
+      }
+    }
   }
 
   private observe(result: unknown): void {
@@ -487,6 +581,12 @@ class Interceptor {
       throw new TypeError("wrapped session has no request() method");
     }
     const [method, toolName] = requestMethodAndTool(args[0]);
+    if (method === "tools/list") {
+      const window = this.openListingWindow(cursorOfRequest(args[0]));
+      const result = (reqFn as AnyFn).apply(target, args);
+      if (isThenable(result)) return result.then((r) => this.filterList(r, window));
+      return this.filterList(result, window);
+    }
     if (method !== "tools/call") {
       return (reqFn as AnyFn).apply(target, args);
     }
@@ -613,6 +713,18 @@ class Interceptor {
   }
 
   private decideOrInternalHold(name: string, operation: Operation): PreflightVerdict {
+    if (this.withheldNames.has(name)) {
+      const verdict = makeVerdict({
+        serverId: this.gate.serverId,
+        toolName: name,
+        decision: Decision.HOLD,
+        reason: WITHHELD_CALL_REASON,
+        isContractDiff: false,
+        holdClass: HoldClass.UNCHECKABLE,
+      });
+      this.recordCall(name, verdict, verdict);
+      return verdict;
+    }
     try {
       const assessed = this.gate.assess(name, this.observed.get(name) ?? null);
       const committed = this.gate.commit(assessed[0], assessed[2]);
@@ -714,7 +826,7 @@ class Interceptor {
     // is there to buy.
     return [
       prov,
-      renderHoldMessage(verdict, sentKeys, null),
+      renderHoldMessage(verdict, sentKeys, this.gate.pinPath),
       renderHoldBanner(verdict, tally),
     ];
   }
@@ -748,6 +860,7 @@ class Interceptor {
     if (behaviourObserved(outcome)) {
       this.lastTierReached.set(toolName, 3);
     }
+    if (resolved.decision === Decision.PROCEED) this.withheldNames.delete(toolName);
     return resolved;
   }
 
@@ -759,6 +872,7 @@ class Interceptor {
       const observed = this.observed.get(name);
       if (observed === undefined) continue;
       written.push(this.gate.repinOne(name, observed));
+      this.withheldNames.delete(name);
       if (this.stats !== null) this.stats.recordRepin();
       this.recordOutcomeResponse(name, Action.REPIN);
     }
@@ -792,11 +906,13 @@ const OWN_METHODS = new Set(["repin", "validateBehaviorNow", "holdBanner", "__in
  * the wrapper's management methods (`repin` / `validateBehaviorNow` /
  * `holdBanner`).
  *
- * `opts` is OPTIONAL. `wrap(session)` uses an EPHEMERAL in-memory `PreflightPin()`
- * under `DEFAULT_SERVER_ID` — it pins each tool trust-on-first-use and HOLDs on
- * drift (never fail-open). Pass `{ pin, serverId }` to share/persist a baseline or
- * opt into fleet telemetry; pass `{ scanResults, onHold, posture, … }` to tune the
- * gate. */
+ * `opts` is OPTIONAL. `wrap(session)` keeps pins in a file under the state
+ * directory (see `defaultPinStorePath`) and HOLDs on drift. Pass
+ * `{ pinStore: "memory" }` for an in-process store, or `{ pin, serverId }` to
+ * supply the store. Pass `{ scanResults, onHold, onWithheld, posture }` to tune
+ * the gate. Under guard and strict, `listTools` leaves out a tool whose
+ * description or input-schema text changed. The SDK client's listChanged
+ * refresh calls the inner client and is not filtered. */
 export type Wrapped<T> = T & {
   repin(tool?: string): PinnedTool[];
   validateBehaviorNow(toolName: string, verifier?: BehavioralVerifier): PreflightVerdict;

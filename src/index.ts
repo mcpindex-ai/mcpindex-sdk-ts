@@ -20,6 +20,7 @@ export type {
 
 export {
   PreflightPin,
+  defaultPinStorePath,
   Decision,
   isProceed,
   renderVerdict,

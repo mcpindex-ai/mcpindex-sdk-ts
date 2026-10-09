@@ -5,10 +5,17 @@
  * PUBLIC schema for diff detail) — NEVER a token, by construction.
  */
 
+import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+
 import { mdText } from "./render.js";
 import { hashTool } from "./canonical.js";
 import type { Change } from "./schemaDiff.js";
 import type { FleetAdvisory } from "./driftQuery.js";
+
+const PIN_STORE_VERSION = 2;
+const EVER_PINNED_NAME = ".ever-pinned.json";
 
 export type ToolDef = Record<string, unknown>;
 
@@ -24,6 +31,10 @@ export interface PinnedTool {
   readonly definitionHash: string;
   readonly pinnedAt: string;
   readonly schema: ToolDef | null;
+  /** Omitted on disk when it is the first-seen baseline, so a Python pin round-trips. */
+  readonly via?: string;
+  /** Kept so a pin written by the Python store is not stripped on the next flush. */
+  readonly classification?: unknown;
 }
 
 export function utcNowIso(): string {
@@ -125,6 +136,8 @@ export interface PreflightVerdict {
    * observation across the fleet, not a safety claim. null when the fleet query is off
    * (opt-in), the tool is clean, or the answer is unknown. */
   readonly fleetAdvisory: FleetAdvisory | null;
+  /** Set when the baseline file could not be read. Posture must not downgrade it. */
+  readonly tamperEvidence?: boolean;
 }
 
 export function makeVerdict(
@@ -152,6 +165,7 @@ export function makeVerdict(
     descAfter: v.descAfter ?? null,
     actionClassification: v.actionClassification ?? null,
     fleetAdvisory: v.fleetAdvisory ?? null,
+    tamperEvidence: v.tamperEvidence ?? false,
   };
 }
 
@@ -229,6 +243,24 @@ function renderVerdictBody(v: PreflightVerdict): string {
  * by `(serverId, toolName)`. Stores ONLY hashes (+ optional PUBLIC schema). */
 export class PreflightPin {
   private readonly index = new Map<string, PinnedTool>();
+  private taintedReason: string | null = null;
+  private newerFormat = false;
+  /** On-disk baseline, or null for an in-memory pin. */
+  readonly path: string | null;
+
+  constructor(path?: string | null) {
+    this.path = path ?? null;
+    if (this.path !== null) this.load();
+  }
+
+  /** Closed reason when a baseline that should have been readable was not. */
+  get tainted(): string | null {
+    return this.taintedReason;
+  }
+
+  get unsupportedVersion(): boolean {
+    return this.newerFormat;
+  }
 
   private key(serverId: string, toolName: string): string {
     // \u001f (UNIT SEPARATOR), not a literal NUL. A raw NUL byte makes git classify this file
@@ -245,6 +277,120 @@ export class PreflightPin {
 
   put(pin: PinnedTool): void {
     this.index.set(this.key(pin.serverId, pin.toolName), pin);
+    this.flush();
+  }
+
+  private load(): void {
+    const path = this.path;
+    if (path === null) return;
+    let st: ReturnType<typeof lstatSync> | null = null;
+    try {
+      st = lstatSync(path);
+    } catch {
+      st = null;
+    }
+    if (st === null) {
+      if (wasEverPinned(path)) {
+        this.taintedReason = "baseline file is missing but this server was pinned before";
+      }
+      return;
+    }
+    if (!st.isFile()) {
+      this.taintedReason = "baseline path is not a regular file";
+      return;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      this.taintedReason = "baseline file is present but unreadable";
+      return;
+    }
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      this.taintedReason = "baseline file is not a pin store";
+      return;
+    }
+    const body = raw as Record<string, unknown>;
+    const version = body["version"];
+    if (typeof version === "number" && version > PIN_STORE_VERSION) {
+      this.newerFormat = true;
+      return;
+    }
+    const records = body["pins"] ?? [];
+    if (!Array.isArray(records)) {
+      this.taintedReason = "baseline file has no readable pin list";
+      return;
+    }
+    for (const rec of records) {
+      if (rec === null || typeof rec !== "object" || Array.isArray(rec)) {
+        this.taintedReason = "baseline file contains an unreadable record";
+        continue;
+      }
+      const row = rec as Record<string, unknown>;
+      const sid = row["server_id"];
+      const tname = row["tool_name"];
+      const dh = row["definition_hash"];
+      const pinnedAt = row["pinned_at"];
+      if (
+        typeof sid !== "string" ||
+        typeof tname !== "string" ||
+        typeof dh !== "string" ||
+        typeof pinnedAt !== "string"
+      ) {
+        this.taintedReason = "baseline file contains an unreadable record";
+        continue;
+      }
+      const schema = row["schema"];
+      const via = row["via"];
+      const pin: PinnedTool = {
+        serverId: sid,
+        toolName: tname,
+        definitionHash: dh,
+        pinnedAt,
+        schema: schema !== null && typeof schema === "object" && !Array.isArray(schema)
+          ? (schema as ToolDef)
+          : null,
+        via: typeof via === "string" && via.length > 0 ? via : "tofu",
+        classification: row["classification"],
+      };
+      this.index.set(this.key(sid, tname), pin);
+    }
+  }
+
+  private flush(): void {
+    const path = this.path;
+    if (path === null) return;
+    const pins = [...this.index.values()].map((p) => {
+      const row: Record<string, unknown> = {
+        server_id: p.serverId,
+        tool_name: p.toolName,
+        definition_hash: p.definitionHash,
+        pinned_at: p.pinnedAt,
+      };
+      if (p.schema !== null) row["schema"] = p.schema;
+      if (p.via !== undefined && p.via !== "tofu") row["via"] = p.via;
+      if (p.classification !== undefined) row["classification"] = p.classification;
+      return row;
+    });
+    const payload = { version: PIN_STORE_VERSION, pins };
+    const directory = dirname(path) || ".";
+    mkdirSync(directory, { recursive: true });
+    const tmp = join(directory, `.${basename(path)}.${process.pid}.tmp`);
+    const encoded = Buffer.from(stableStringify(payload), "utf8");
+    const fd = openSync(tmp, "w", 0o600);
+    try {
+      writeSync(fd, encoded);
+      closeSync(fd);
+      renameSync(tmp, path);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // the temp file may already be gone
+      }
+      throw err;
+    }
+    recordEverPinned(path);
   }
 
   toolsFor(serverId: string): PinnedTool[] {
@@ -254,6 +400,98 @@ export class PreflightPin {
   allPins(): PinnedTool[] {
     return [...this.index.values()];
   }
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(sortKeys(value), null, 2) + "\n";
+}
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      out[key] = sortKeys((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function everPinnedPath(storePath: string): string {
+  return join(dirname(storePath) || ".", EVER_PINNED_NAME);
+}
+
+function wasEverPinned(storePath: string): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(everPinnedPath(storePath), "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const stores = (raw as Record<string, unknown>)["stores"];
+    return Array.isArray(stores) && stores.includes(basename(storePath));
+  } catch {
+    return false;
+  }
+}
+
+function recordEverPinned(storePath: string): void {
+  const indexPath = everPinnedPath(storePath);
+  const name = basename(storePath);
+  try {
+    let stores: string[] = [];
+    try {
+      const raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
+      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+        const found = (raw as Record<string, unknown>)["stores"];
+        if (Array.isArray(found)) stores = found.filter((s): s is string => typeof s === "string");
+      }
+    } catch {
+      stores = [];
+    }
+    if (stores.includes(name)) return;
+    stores.push(name);
+    const directory = dirname(indexPath) || ".";
+    mkdirSync(directory, { recursive: true });
+    const tmp = join(directory, `.ever-pinned.${process.pid}.tmp`);
+    const fd = openSync(tmp, "w", 0o600);
+    try {
+      writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
+      fsyncSync(fd);
+      closeSync(fd);
+      chmodSync(tmp, 0o600);
+      renameSync(tmp, indexPath);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // already removed
+      }
+      throw err;
+    }
+  } catch {
+    return;
+  }
+}
+
+export function sanitizeServerId(serverId: string): string {
+  const safe = serverId
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/^[._]+|[._]+$/g, "")
+    .slice(0, 128);
+  return safe.length > 0 ? safe : "_";
+}
+
+/** Pin file for one server. `MCPINDEX_STATE_DIR/pins/<id>.json`, else `~/.mcpindex/pins/<id>.json`. */
+export function defaultPinStorePath(serverId: string): string {
+  const fromEnv = process.env.MCPINDEX_STATE_DIR;
+  let root: string;
+  if (typeof fromEnv === "string" && fromEnv.trim().length > 0) {
+    root = fromEnv;
+  } else if (process.execArgv.includes("--test") || process.argv.includes("--test")) {
+    root = join(tmpdir(), "mcpindex-sdk-test", String(process.pid));
+  } else {
+    root = join(homedir(), ".mcpindex");
+  }
+  return join(root, "pins", `${sanitizeServerId(serverId)}.json`);
 }
 
 export { hashTool };

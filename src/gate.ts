@@ -834,6 +834,10 @@ export class Gate {
   get serverId(): string {
     return this._serverId;
   }
+  get pinPath(): string | null {
+    return this.pin.path;
+  }
+
   get posture(): Posture {
     return this._posture;
   }
@@ -898,6 +902,11 @@ export class Gate {
     name: string,
     observed: ToolDef | null,
   ): [PreflightVerdict, PreflightVerdict, GateEffect[]] {
+    const tampered = this.tamperReason();
+    if (tampered !== null) {
+      const verdict = this.tamperHold(name, tampered);
+      return [verdict, verdict, []];
+    }
     const [staticVerdict, effects] = this.collect(name, observed);
     return [staticVerdict, this.applyPosture(staticVerdict), effects];
   }
@@ -1320,6 +1329,7 @@ export class Gate {
   // ------------------------------------------------------------- posture layer
   applyPosture(stat: PreflightVerdict): PreflightVerdict {
     if (stat.decision === Decision.PROCEED) return stat;
+    if (stat.tamperEvidence) return stat;
     if (this._posture === Posture.STRICT) return stat;
     if (this._posture === Posture.MONITOR) return this.notifyOnly(stat);
     // GUARD
@@ -1337,6 +1347,23 @@ export class Gate {
       const verdict = this.internalErrorVerdict(name);
       return [verdict, verdict];
     }
+  }
+
+  private tamperReason(): string | null {
+    const tainted = this.pin.tainted;
+    return typeof tainted === "string" && tainted.length > 0 ? tainted : null;
+  }
+
+  private tamperHold(name: string, reason: string): PreflightVerdict {
+    return makeVerdict({
+      serverId: this._serverId,
+      toolName: name,
+      decision: Decision.HOLD,
+      reason,
+      isContractDiff: false,
+      holdClass: HoldClass.UNCHECKABLE,
+      tamperEvidence: true,
+    });
   }
 
   internalErrorVerdict(name: string): PreflightVerdict {
