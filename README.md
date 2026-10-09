@@ -3,7 +3,7 @@
 The TypeScript client of [mcpindex.ai](https://mcpindex.ai) - the drift-monitored
 MCP server index with an in-path trust gate for agent tool calls.
 
-Pre-flight MCP tool-contract drift interceptor. One line — `wrap()` an MCP client
+Pre-flight MCP tool-contract drift interceptor. One line - `wrap()` an MCP client
 session and the gate **HOLDs a tool call before your agent acts** the moment the
 tool's contract silently changes from what you pinned. In-path, on your host; no
 credentials, no egress.
@@ -29,21 +29,25 @@ const guarded = wrap(session);   // pins each tool's contract on first use (TOFU
 // Review / Re-pin / Validate.
 ```
 
-`wrap(session)` uses an **ephemeral in-memory** pin baseline (dies with the
-process). For a durable baseline you control — or to opt into fleet telemetry —
-pass your own pin and a stable server id:
+`wrap(session)` with no server id keeps an **in-memory** pin baseline that dies
+with the process. Pass a stable server id and the baseline is kept on disk and
+survives restarts, under `MCPINDEX_STATE_DIR/pins/<server id>.json` or
+`~/.mcpindex/pins/<server id>.json`:
 
 ```ts
-import { wrap, PreflightPin } from '@mcp-index/sdk';
+import { wrap } from '@mcp-index/sdk';
 
-const pin = new PreflightPin();                       // your in-memory baseline
-const guarded = wrap(session, { pin, serverId: 'my-mcp-server' });
+const guarded = wrap(session, { serverId: 'my-mcp-server' }); // pins on disk
 ```
 
-## Sign in (optional) — `mcpindex login`
+`pinStore: 'memory'` keeps pins in the process even with a server id, and
+`pinStore: 'file'` forces the file store without one. You can also pass your own
+`PreflightPin` as `pin`.
+
+## Sign in (optional) - `mcpindex login`
 
 Signs you in with GitHub and stores a free API key at `~/.mcpindex/credentials.json`
-(mode `0600`), used to authenticate deeper trust checks. Optional — `wrap()` needs no
+(mode `0600`), used to authenticate deeper trust checks. Optional - `wrap()` needs no
 account and sends nothing on its own.
 
 ```sh
@@ -57,7 +61,7 @@ npx -p @mcp-index/sdk mcpindex login
 ```
 
 The key is minted server-side after GitHub OAuth and handed to a one-shot HTTP listener
-bound to `127.0.0.1` — it never transits a third party. Point `MCPINDEX_WEB_BASE` at a
+bound to `127.0.0.1` - it never transits a third party. Point `MCPINDEX_WEB_BASE` at a
 different host to override the default (`https://mcpindex.ai`).
 
 ## What it does
@@ -65,32 +69,32 @@ different host to override the default (`https://mcpindex.ai`).
 - Pins each MCP tool's contract trust-on-first-use (TOFU), persisted across restarts.
 - Runs a **deterministic** contract-diff (the ChangeKind taxonomy: added-required-param,
   constraint-narrowed, annotation-flip-to-destructive, output-schema-changed,
-  type/enum/removed, …) plus an injection/exfil marker scan over input and output schema.
-- **HOLDs** the call with the ⬡ banner when the contract drifted; **PROCEEDs** silently
+  type/enum/removed, ...) plus an injection/exfil marker scan over input and output schema.
+- **HOLDs** the call with the mcpindex hold banner when the contract drifted; **PROCEEDs** silently
   on a benign change (no false alarm).
 - Postures: `Monitor` (notify + proceed) / `Guard` (default; hold dangerous) /
   `Strict` (hold any drift).
 - Grades each call's **blast radius** (Tier-0a action classification) on the verdict:
-  action type (read / write / delete / send / …), reversibility, egress, and a static
-  autonomy ceiling, computed locally from the live contract. **Advisory** — it rides
+  action type (read / write / delete / send / ...), reversibility, egress, and a static
+  autonomy ceiling, computed locally from the live contract. **Advisory** - it rides
   alongside the decision and never moves HOLD/PROCEED. On by default; opt out with
   `MCPINDEX_ACTION_CLASSIFICATION_ENABLED=0`.
 
 ## What it is NOT
 
-The verdict is a **contract-diff, not a safety oracle** — it tells you the contract
+The verdict is a **contract-diff, not a safety oracle** - it tells you the contract
 *changed* versus your pin, not that the new contract is safe. It does not "block attacks"
 or "guarantee safe." You decide what a HOLD means for your agent.
 
 ## Result-content scanning (opt-in, OFF by default)
 
 Beyond the contract diff, the SDK can scan a tool's **returned result** (text blocks and
-`structuredContent`) for prompt-injection / exfiltration / credential-path markers — the
+`structuredContent`) for prompt-injection / exfiltration / credential-path markers - the
 attack where a *compromised result*, not a changed contract, tries to steer your agent. It
 is **off by default** (zero behavior change) and enabled per-wrap:
 
 ```ts
-const safe = wrap(session, { scanResults: true, onHold: (v) => { /* … */ } });
+const safe = wrap(session, { scanResults: true, onHold: (v) => { /* ... */ } });
 ```
 
 Once on, a tainted result is **withheld under `Guard` / `Strict`** and **passes through
@@ -100,7 +104,7 @@ client's `wrap(..., scan_results=...)`.
 
 ## Drift telemetry (opt-in, OFF by default)
 
-The SDK can report **that** a tool's contract drifted — so mcpindex can track drift on servers
+The SDK can report **that** a tool's contract drifted - so mcpindex can track drift on servers
 it can't crawl itself (private / auth-gated). It is **off by default and sends nothing** unless
 you turn it on:
 
@@ -113,7 +117,7 @@ When enabled, each tool you pin and each contract drift sends **one one-way sign
 - **What it sends:** fingerprints (HMAC) of the server/tool id, the contract hashes, the
   change type (the fixed ChangeKind vocabulary), a safety flag, an **hour-rounded** timestamp,
   a random install id (a token that links one machine's signals so distinct installs can be
-  counted — not derived from you), and a client SDK tag (`py` or `ts`).
+  counted - not derived from you), and a client SDK tag (`py` or `ts`).
 - **What it NEVER sends:** tool schemas, arguments, descriptions, URLs, or any of your data.
   The fingerprints carry no plaintext name and they are **not anonymity**: the salt is a
   constant in this client and the registry is public, so a listed server's fingerprint
@@ -140,5 +144,5 @@ Three ways to bring mcpindex into an agent, for different surfaces:
 
 ## License
 
-PolyForm Noncommercial 1.0.0 — © Bhartis LLC. Free for noncommercial use; commercial use
+PolyForm Noncommercial 1.0.0 - (c) Bhartis LLC. Free for noncommercial use; commercial use
 requires a separate license. See [`LICENSE`](./LICENSE) and https://mcpindex.ai.

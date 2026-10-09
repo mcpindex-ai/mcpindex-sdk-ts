@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Gate, Posture } from "../src/gate.js";
 import { filterListing, replaceToolList } from "../src/listingFilter.js";
 import { Decision, PreflightPin, defaultPinStorePath } from "../src/preflight.js";
-import { wrap } from "../src/wrap.js";
+import { DEFAULT_SERVER_ID, wrap } from "../src/wrap.js";
 import { PreflightHold } from "../src/wrap.js";
 
 const BASE = {
@@ -131,6 +131,43 @@ test("file pin survives a new store and memory does not", () => {
     assert.equal(round.pins[0]?.["via"], undefined);
     const memory = wrap({ listTools: async () => ({ tools: [] }) }, { pinStore: "memory", serverId: "mem" });
     assert.equal(memory.__interceptor__ !== undefined, true);
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the default pin is a file only when a serverId is given", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-pin-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
+  const tool = { name: "search", description: "Find things.", inputSchema: { type: "object" } };
+  const session = { listTools: async () => ({ tools: [tool] }) };
+  try {
+    await wrap(session).listTools();
+    assert.equal(existsSync(defaultPinStorePath(DEFAULT_SERVER_ID)), false);
+    await wrap(session, { serverId: "named" }).listTools();
+    assert.equal(existsSync(defaultPinStorePath("named")), true);
+    await wrap(session, { pinStore: "file" }).listTools();
+    assert.equal(existsSync(defaultPinStorePath(DEFAULT_SERVER_ID)), true);
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("two unnamed wrapped servers do not share pins", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-pin-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
+  try {
+    const a = { listTools: async () => ({ tools: [{ name: "search", description: "Search docs.", inputSchema: { type: "object" } }] }) };
+    const b = { listTools: async () => ({ tools: [{ name: "search", description: "Search tickets.", inputSchema: { type: "object" } }] }) };
+    await wrap(a).listTools();
+    const listed = (await wrap(b).listTools()) as { tools: { name: string }[] };
+    assert.deepEqual(listed.tools.map((t) => t.name), ["search"]);
   } finally {
     if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
     else process.env.MCPINDEX_STATE_DIR = previous;

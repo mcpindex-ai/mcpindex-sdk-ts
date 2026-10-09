@@ -104,12 +104,14 @@ export class PreflightHold extends Error {
 export const DEFAULT_SERVER_ID = "mcp";
 
 export interface WrapOptions {
-  /** The pin store the tools are checked against. Optional: when omitted, pins
-   * are kept in a file under the state directory and survive a process restart.
+  /** The pin store the tools are checked against. Optional: when omitted and a
+   * `serverId` is given, pins are kept in a file under the state directory and
+   * survive a process restart. With no `serverId` the default stays in memory.
    * Pass `pinStore: "memory"` for a store that dies with the process, or pass
    * your own `PreflightPin`. */
   pin?: PreflightPin;
-  /** `"memory"` keeps pins in this process only. The default is a file. */
+  /** `"memory"` keeps pins in this process only. `"file"` forces the file store
+   * even without a `serverId`. The default is a file when `serverId` is set. */
   pinStore?: "memory" | "file";
   /** Called when a tool is left out of a list: server id, tool, reason, live hash. */
   onWithheld?: ((serverId: string, tool: string, reason: string, definitionHash: string) => void) | null;
@@ -325,8 +327,8 @@ class Interceptor {
   ) {
     this.onWithheld = opts.onWithheld ?? null;
     this.gate = new Gate({
-      // Default pin file is under the state directory. pinStore "memory" is the
-      // in-process opt-in. A fresh pin still pins on first observe.
+      // With a serverId the default pin is a file under the state directory; without
+      // one it stays in memory (see defaultPin). A fresh pin still pins on first observe.
       pin: opts.pin ?? this.defaultPin(opts),
       serverId: opts.serverId ?? DEFAULT_SERVER_ID,
       failOpen: opts.failOpen,
@@ -380,6 +382,10 @@ class Interceptor {
 
   private defaultPin(opts: WrapOptions): PreflightPin {
     if (opts.pinStore === "memory") return new PreflightPin();
+    // Without a serverId every wrapped session would share one file under the
+    // DEFAULT_SERVER_ID namespace, and two servers that both expose a tool named
+    // `search` would collide. Keep that case in memory unless the caller opts in.
+    if (opts.serverId === undefined && opts.pinStore !== "file") return new PreflightPin();
     return new PreflightPin(defaultPinStorePath(opts.serverId ?? DEFAULT_SERVER_ID));
   }
 
