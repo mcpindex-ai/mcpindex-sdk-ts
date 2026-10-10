@@ -5,6 +5,14 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.16.0 - 2026-10-10
+
+### Changed
+
+- Under guard and strict, a new tool on an already-pinned server is left out of the tool list and cannot be called until it is reviewed. `approvePending(name, hash)` pins the stored definition when the hash matches. `onWithheld` still carries the hash.
+- A change that arrives without an upgrade is held for review and is never bulk-approved. `newTools: "tofu"` restores first-sight trust for that wrapper.
+- The file pin store reloads under a sibling flock before each write, so a Python CLI approval and a TypeScript process on the same pin file cannot lose each other's pins. Pins may carry an optional `launchKey`.
+
 ## 0.15.0 - 2026-10-05
 
 ### Changed

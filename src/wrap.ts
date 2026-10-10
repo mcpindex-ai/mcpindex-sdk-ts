@@ -5,7 +5,8 @@
  * `wrap(session)` returns a transparent JS `Proxy` over the real
  * `@modelcontextprotocol/sdk` `Client`: every method/prop passes through the
  * get-trap UNTOUCHED, EXCEPT the three gated seams:
- *   - `listTools`  — TOFU-pin every observed tool's PUBLIC contract.
+ *   - `listTools`  — pin first-seen tools; under guard/strict a new tool on an
+ *     already-pinned server is left out until reviewed.
  *   - `callTool`   — run the shared Gate before delegating; HOLD on drift.
  *   - `request`    — the low-level RPC chokepoint (the TS analog of Python's
  *     `send_request`). `callTool` is sugar over `request({method:'tools/call'})`,
@@ -47,7 +48,15 @@ import {
   rawToolEntries,
   replaceToolList,
 } from "./listingFilter.js";
+import type { WithheldNotice } from "./listingFilter.js";
 import type { PinnedTool, PreflightVerdict, ToolDef } from "./preflight.js";
+import {
+  approveOne,
+  defaultStateDir,
+  pendingClass,
+  pendingPath,
+  recordPending,
+} from "./pendingStore.js";
 import { scanResult } from "./scan.js";
 import type { ResultScan } from "./scan.js";
 import { ChangeKind } from "./schemaDiff.js";
@@ -128,6 +137,8 @@ export interface WrapOptions {
   verifier?: BehavioralVerifier | null;
   autoValidateBehavior?: boolean;
   posture?: Posture;
+  /** ``review`` (default) holds a new tool on an already-pinned server. ``tofu`` pins it. */
+  newTools?: "review" | "tofu";
   stats?: LocalStats | null;
   outcomes?: OutcomeStore | null;
   errors?: ErrorStore | null;
@@ -313,6 +324,7 @@ class Interceptor {
   private readonly observed = new Map<string, ToolDef>();
   private readonly withheldNames = new Set<string>();
   private listingNames = new Set<string>();
+  private priorNames = new Set<string>();
   private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
   // The tier the LAST gated call for a tool ACTUALLY reached, for its provenance (mirrors the
@@ -339,6 +351,7 @@ class Interceptor {
       verifier: opts.verifier ?? null,
       posture: opts.posture,
       errors: opts.errors ?? null,
+      newTools: opts.newTools,
     });
     this.onHold = opts.onHold ?? null;
     this.autoValidateBehavior = opts.autoValidateBehavior ?? false;
@@ -412,6 +425,8 @@ class Interceptor {
         this.gate.captureError(new Error("listing over cap"), Operation.LIST_TOOLS, "wrap.listTools");
         return replaceToolList(result, []);
       }
+      this.gate.reloadPins();
+      this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
       this.observe(result);
       if (this.gate.posture === Posture.MONITOR) return result;
       const outcome = filterListing(this.gate, raw, window);
@@ -431,9 +446,29 @@ class Interceptor {
     }
   }
 
-  private emitWithheld(notices: { serverId: string; toolName: string; reason: string; definitionHash: string }[]): void {
+  private emitWithheld(notices: WithheldNotice[]): void {
+    const prior = this.gate.pinnedTools().filter((pin) => this.priorNames.has(pin.toolName));
+    const klass = pendingClass(prior);
+    const sharedKey =
+      prior.length > 0 && prior.every((pin) => pin.launchKey === prior[0]!.launchKey)
+        ? prior[0]!.launchKey
+        : undefined;
     for (const notice of notices) {
       this.withheldNames.add(notice.toolName);
+      if (notice.reviewable && notice.definition !== null) {
+        try {
+          recordPending(pendingPath(defaultStateDir()), {
+            serverId: notice.serverId,
+            toolName: notice.toolName,
+            definition: notice.definition,
+            definitionHash: notice.definitionHash,
+            pendingClass: klass,
+            launchKey: sharedKey,
+          });
+        } catch {
+          // recording a hold must not break the list
+        }
+      }
       if (this.onWithheld == null) continue;
       try {
         this.onWithheld(notice.serverId, notice.toolName, notice.reason, notice.definitionHash);
@@ -446,14 +481,32 @@ class Interceptor {
   private observe(result: unknown): void {
     try {
       const tools = toolsFromResult(result);
+      const allowNew =
+        this.priorNames.size === 0 ||
+        this.gate.posture === Posture.MONITOR ||
+        this.gate.newTools === "tofu";
       for (const defn of tools) {
         const name = defn["name"] as string;
         this.observed.set(name, defn);
+        if (!this.priorNames.has(name) && !allowNew) continue;
         this.gate.observe(name, defn);
       }
     } catch (exc) {
       this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.observe");
     }
+  }
+
+  /** Pin a held tool from the stored definition when the hash matches. */
+  approvePending(name: string, definitionHash: string): PinnedTool | null {
+    const written = approveOne(
+      this.gate.pinStore,
+      pendingPath(defaultStateDir()),
+      this.gate.serverId,
+      name,
+      definitionHash,
+    );
+    if (written !== null) this.withheldNames.delete(name);
+    return written;
   }
 
   // -------------------------------------------------------------- call_tool
@@ -895,7 +948,13 @@ function warn(verdict: PreflightVerdict): void {
 }
 
 // The wrapper's OWN management methods — names that shadow delegation.
-const OWN_METHODS = new Set(["repin", "validateBehaviorNow", "holdBanner", "__interceptor__"]);
+const OWN_METHODS = new Set([
+  "repin",
+  "approvePending",
+  "validateBehaviorNow",
+  "holdBanner",
+  "__interceptor__",
+]);
 
 /** Wrap an already-authenticated MCP client session. Returns a TRANSPARENT
  * drop-in `Proxy` with the same surface: `listTools` / `callTool` are gated and
@@ -903,18 +962,20 @@ const OWN_METHODS = new Set(["repin", "validateBehaviorNow", "holdBanner", "__in
  * delegated UNTOUCHED. NO credential is read, stored, or transmitted.
  *
  * `T` is the wrapped session type (e.g. the SDK `Client`); the return type adds
- * the wrapper's management methods (`repin` / `validateBehaviorNow` /
- * `holdBanner`).
+ * the wrapper's management methods (`repin` / `approvePending` /
+ * `validateBehaviorNow` / `holdBanner`).
  *
  * `opts` is OPTIONAL. `wrap(session)` keeps pins in a file under the state
  * directory (see `defaultPinStorePath`) and HOLDs on drift. Pass
  * `{ pinStore: "memory" }` for an in-process store, or `{ pin, serverId }` to
  * supply the store. Pass `{ scanResults, onHold, onWithheld, posture }` to tune
  * the gate. Under guard and strict, `listTools` leaves out a tool whose
- * description or input-schema text changed. The SDK client's listChanged
- * refresh calls the inner client and is not filtered. */
+ * description or input-schema text changed, and a new tool on an already-pinned
+ * server until it is reviewed (`approvePending` or the upgrade CLI). The SDK
+ * client's listChanged refresh calls the inner client and is not filtered. */
 export type Wrapped<T> = T & {
   repin(tool?: string): PinnedTool[];
+  approvePending(name: string, definitionHash: string): PinnedTool | null;
   validateBehaviorNow(toolName: string, verifier?: BehavioralVerifier): PreflightVerdict;
   holdBanner(verdict: PreflightVerdict): string;
   readonly __interceptor__: unknown;
@@ -974,6 +1035,10 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
       }
       if (prop === "repin") {
         return (tool?: string): PinnedTool[] => interceptor.repin(tool);
+      }
+      if (prop === "approvePending") {
+        return (name: string, definitionHash: string): PinnedTool | null =>
+          interceptor.approvePending(name, definitionHash);
       }
       if (prop === "validateBehaviorNow") {
         return (toolName: string, verifier?: BehavioralVerifier): PreflightVerdict =>

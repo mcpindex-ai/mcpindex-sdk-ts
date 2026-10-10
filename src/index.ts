@@ -10,6 +10,18 @@
 export { wrap, repin, PreflightHold, DEFAULT_SERVER_ID } from "./wrap.js";
 export type { Wrapped, WrapOptions } from "./wrap.js";
 
+export {
+  approveOne,
+  defaultStateDir,
+  loadPending,
+  pendingClass,
+  pendingPath,
+  recordPending,
+  CLASS_CHANGED,
+  CLASS_FLOATING,
+} from "./pendingStore.js";
+export type { PendingRecord } from "./pendingStore.js";
+
 export { AmbientMode, AmbientNotifier, resolveMode } from "./ambient.js";
 export type {
   AmbientNote,

@@ -27,6 +27,9 @@ export interface WithheldNotice {
   toolName: string;
   reason: string;
   definitionHash: string;
+  definition: ToolDef | null;
+  /** False for a duplicate name, a wrong JSON type, or a check that raised. */
+  reviewable: boolean;
 }
 
 export interface ListingOutcome {
@@ -93,11 +96,14 @@ export function filterListing(gate: Gate, entries: unknown[], seen: Set<string>)
     try {
       notice = judge(gate, entry, name, counts, seen);
     } catch {
+      const contract = publicContract(entry);
       notice = {
         serverId: gate.serverId,
         toolName: name,
         reason: "listing check failed",
-        definitionHash: hashOrBlank(publicContract(entry)),
+        definitionHash: hashOrBlank(contract),
+        definition: contract,
+        reviewable: false,
       };
     }
     if (notice === null) kept.push(entry);
@@ -131,11 +137,18 @@ function judge(
 }
 
 function notice(gate: Gate, name: string, reason: string, entry: unknown): WithheldNotice {
+  const contract = publicContract(entry);
+  const reviewable =
+    reason !== "listing check failed" &&
+    reason !== "duplicate name in this tool list" &&
+    !reason.endsWith("is not an object");
   return {
     serverId: gate.serverId,
     toolName: name,
     reason,
-    definitionHash: hashOrBlank(publicContract(entry)),
+    definitionHash: hashOrBlank(contract),
+    definition: contract,
+    reviewable,
   };
 }
 
