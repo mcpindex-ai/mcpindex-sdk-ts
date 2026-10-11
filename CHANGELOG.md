@@ -5,21 +5,15 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
-## 0.16.1 - 2026-10-11
-
-### Security
-
-- A pin file deleted or replaced with a symlink or directory at runtime no longer clears the in-memory index into a first-sight empty store. The store stays tainted and refuses writes until restart review.
-- Stale `.lck` break restores a live lock when the renamed inode differs from the stale lstat. A symlink or empty directory at the lock path is removed after the age check.
-- Pin and ever-pinned temp files use `O_CREAT|O_EXCL|O_NOFOLLOW` with a random suffix.
-
-## 0.16.0 - 2026-10-10
+## 0.16.0 - 2026-10-11
 
 ### Changed
 
-- Under guard and strict, a new tool on an already-pinned server is left out of the tool list and cannot be called until it is reviewed. `approvePending(name, hash)` pins the stored definition when the hash matches. `onWithheld` still carries the hash.
+- Under guard and strict, a new tool on an already-pinned server is left out of the tool list and cannot be called until it is reviewed. `approvePending(name, digest)` pins the stored definition when the digest over its full public contract matches. `onWithheld` carries that digest.
 - A change that arrives without an upgrade is held for review and is never bulk-approved. `newTools: "tofu"` restores first-sight trust for that wrapper.
-- The file pin store reloads under a sibling flock before each write, so a Python CLI approval and a TypeScript process on the same pin file cannot lose each other's pins. Pins may carry an optional `launchKey`.
+- The file pin store takes a lock and merges from disk before each write, so a Python CLI approval and a TypeScript process on the same pin file cannot lose each other's pins. The lock uses only Node built-ins and works on Windows. The package has no runtime dependencies. Pins may carry an optional `launchKey`.
+- A pin file that goes missing or stops being a regular file while the process runs is treated as tampered: pins already loaded are kept and every call holds until restart.
+- The SDK client's own listChanged refresh is still not filtered.
 
 ## 0.15.0 - 2026-10-05
 
