@@ -47,9 +47,10 @@ const guarded = wrap(session, { serverId: 'my-mcp-server' }); // pins on disk
 ### New tools on an already-pinned server
 
 Under `guard` and `strict`, when a server you already pinned adds a tool, that
-tool is left out of the list and a call to it holds. `onWithheld` receives the
-definition digest. Pin the stored definition with `approvePending(name, digest)`
-when you have reviewed it:
+tool is left out of the list and a call to it holds. It is not trusted mid-session on
+first sight. A process running as you that rewrites the pin store with its own
+well-formed pins is still trusted. `onWithheld` receives the definition digest. Pin
+the stored definition with `approvePending(name, digest)` when you have reviewed it:
 
 ```ts
 const guarded = wrap(session, {

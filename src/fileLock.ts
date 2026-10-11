@@ -65,6 +65,19 @@ function createLock(lockPath: string, pid: number, stamp: string): void {
   }
 }
 
+function readLockIdentity(lockPath: string): { pid: number; stamp: string } | null {
+  try {
+    const text = readFileSync(lockPath, "ascii");
+    const lines = text.split(/\r?\n/);
+    if (lines.length < 2) return null;
+    const pid = Number(lines[0]);
+    if (!Number.isFinite(pid)) return null;
+    return { pid, stamp: lines[1] ?? "" };
+  } catch {
+    return null;
+  }
+}
+
 function tryBreakStale(lockPath: string): void {
   let st;
   try {
@@ -92,6 +105,22 @@ function tryBreakStale(lockPath: string): void {
     }
     return;
   }
+  // Capture the holder we judged stale. If a new holder rewrote the file
+  // before we rename, leave it alone and retry.
+  const identity = readLockIdentity(lockPath);
+  if (identity === null) return;
+  const again = readLockIdentity(lockPath);
+  if (
+    again === null ||
+    again.pid !== identity.pid ||
+    again.stamp !== identity.stamp
+  ) {
+    return;
+  }
+  // Remaining window: a third process can still create a lock between this
+  // re-read and the rename below. The post-rename inode check restores when
+  // the aside inode differs from the stale lstat; that does not close a
+  // create that lands after rename. Documented, not closed.
   const aside = `${lockPath}.stale.${process.pid}.${process.hrtime.bigint()}`;
   try {
     renameSync(lockPath, aside);
@@ -125,14 +154,8 @@ function tryBreakStale(lockPath: string): void {
 }
 
 function stillOurs(lockPath: string, pid: number, stamp: string): boolean {
-  try {
-    const text = readFileSync(lockPath, "ascii");
-    const lines = text.split(/\r?\n/);
-    if (lines.length < 2) return false;
-    return Number(lines[0]) === pid && lines[1] === stamp;
-  } catch {
-    return false;
-  }
+  const identity = readLockIdentity(lockPath);
+  return identity !== null && identity.pid === pid && identity.stamp === stamp;
 }
 
 function release(lockPath: string, pid: number, stamp: string): void {

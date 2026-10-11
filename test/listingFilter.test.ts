@@ -226,6 +226,113 @@ test("a deleted pin file does not silently start over", () => {
   assert.equal(verdict.tamperEvidence, true);
 });
 
+test("empty or foreign store swap does not first-sight new tools", async () => {
+  const { writeFileSync, renameSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-empty-swap-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
+  const evil = {
+    name: "evil",
+    description: "new",
+    inputSchema: { type: "object", properties: {} },
+  };
+  const shapes = [
+    '{"version":2,"pins":[]}\n',
+    "{}\n",
+    '{"version":1}\n',
+    JSON.stringify({
+      version: 2,
+      pins: [
+        {
+          server_id: "other",
+          tool_name: "x",
+          definition_hash: "ab".repeat(32),
+          pinned_at: "2026-10-09T00:00:00+00:00",
+        },
+      ],
+    }) + "\n",
+  ];
+  try {
+    for (const [i, body] of shapes.entries()) {
+      const path = join(dir, `swap-${i}.json`);
+      const pin = new PreflightPin(path);
+      const session = {
+        tools: [{ ...BASE }],
+        async listTools() {
+          return { tools: this.tools };
+        },
+        async callTool(_params?: { name?: string; arguments?: Record<string, unknown> }) {
+          return { ok: true };
+        },
+      };
+      const wrapped = wrap(session, { pin, serverId: "srv", posture: Posture.GUARD });
+      await wrapped.listTools();
+      assert.ok(pin.get("srv", "echo"));
+      const alt = join(dir, `alt-${i}.json`);
+      writeFileSync(alt, body);
+      renameSync(alt, path);
+      session.tools = [{ ...BASE }, evil];
+      const listed = (await wrapped.listTools()) as { tools: { name: string }[] };
+      assert.ok(!listed.tools.some((t) => t.name === "evil"), `evil shown for ${body}`);
+      assert.equal(pin.get("srv", "evil"), null);
+      assert.ok(pin.tainted, `must be tainted for ${body}`);
+      await assert.rejects(
+        () => wrapped.callTool({ name: "evil", arguments: {} }),
+        PreflightHold,
+      );
+    }
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resetPins clears a tainted empty store so the next list can pin", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const { resetPins } = await import("../src/pendingStore.js");
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-reset-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
+  const path = join(dir, "pins", "srv.json");
+  try {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(dir, "pins"), { recursive: true });
+    const pin = new PreflightPin(path);
+    pin.put({
+      serverId: "srv",
+      toolName: "echo",
+      definitionHash: "ab".repeat(32),
+      pinnedAt: "2026-10-09T00:00:00+00:00",
+      schema: { ...BASE },
+    });
+    writeFileSync(path, '{"version":2,"pins":[]}\n');
+    const tainted = new PreflightPin(path);
+    assert.ok(tainted.tainted);
+    const result = resetPins("srv", { path });
+    assert.equal(result.path, path);
+    const session = {
+      tools: [{ ...BASE }],
+      async listTools() {
+        return { tools: this.tools };
+      },
+    };
+    const fresh = new PreflightPin(path);
+    assert.equal(fresh.tainted, null);
+    const wrapped = wrap(session, { pin: fresh, serverId: "srv", posture: Posture.GUARD });
+    const listed = (await wrapped.listTools()) as { tools: { name: string }[] };
+    assert.deepEqual(
+      listed.tools.map((t) => t.name),
+      ["echo"],
+    );
+    assert.ok(fresh.get("srv", "echo"));
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runtime pin delete or symlink does not first-sight new tools", async () => {
   const { mkdirSync, symlinkSync, writeFileSync } = await import("node:fs");
   const dir = mkdtempSync(join(tmpdir(), "mcpindex-runtime-"));

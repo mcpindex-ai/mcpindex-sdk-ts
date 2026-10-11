@@ -13,6 +13,8 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 - A change that arrives without an upgrade is held for review and is never bulk-approved. `newTools: "tofu"` restores first-sight trust for that wrapper.
 - The file pin store takes a lock and merges from disk before each write, so a Python CLI approval and a TypeScript process on the same pin file cannot lose each other's pins. The lock uses only Node built-ins and works on Windows. The package has no runtime dependencies. Pins may carry an optional `launchKey`.
 - A pin file that goes missing or stops being a regular file while the process runs is treated as tampered: pins already loaded are kept and every call holds until restart.
+- A pin store swapped at runtime for an empty or foreign valid file is treated the same way when this server was already pinned. `resetPins(serverId)` clears the store and its ever-pinned record so the next list can pin again.
+- A pin reload that fails under a lock timeout classifies held tools as changed-without-upgrade, not floating.
 - The SDK client's own listChanged refresh is still not filtered.
 
 ## 0.15.0 - 2026-10-05

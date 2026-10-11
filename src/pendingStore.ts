@@ -25,7 +25,14 @@ import { basename, dirname, join } from "node:path";
 
 import { withExclusiveLock } from "./fileLock.js";
 import { approvalDigest, hashTool } from "./canonical.js";
-import { PreflightPin, utcNowIso, type PinnedTool, type ToolDef } from "./preflight.js";
+import {
+  PreflightPin,
+  clearEverPinned,
+  defaultPinStorePath,
+  utcNowIso,
+  type PinnedTool,
+  type ToolDef,
+} from "./preflight.js";
 
 export const CLASS_CHANGED = "changed-without-upgrade";
 export const CLASS_FLOATING = "floating";
@@ -318,4 +325,42 @@ export function approveOne(
 /** Basename helper kept for tests that inspect the pending file name. */
 export function pendingFileName(): string {
   return basename(NAME);
+}
+
+export type ResetPinsResult = {
+  path: string;
+  pinCount: number;
+  tainted: string | null;
+};
+
+/**
+ * Delete one server's pin store and its ever-pinned record, and drop its
+ * pending rows. The next tools/list pins from the current contract.
+ */
+export function resetPins(
+  serverId: string,
+  opts?: { path?: string },
+): ResetPinsResult {
+  const path = opts?.path ?? defaultPinStorePath(serverId);
+  const before = new PreflightPin(path);
+  const pinCount = before.toolsFor(serverId).length;
+  const tainted = before.tainted;
+  withExclusiveLock(path, () => {
+    try {
+      unlinkSync(path);
+    } catch {
+      // absent is fine
+    }
+    clearEverPinned(path);
+  });
+  const pending = pendingPath(defaultStateDir());
+  try {
+    withExclusiveLock(pending, () => {
+      const remain = loadUnlocked(pending).filter((rec) => rec.serverId !== serverId);
+      dumpUnlocked(pending, remain);
+    });
+  } catch {
+    // no pending file is fine
+  }
+  return { path, pinCount, tainted };
 }

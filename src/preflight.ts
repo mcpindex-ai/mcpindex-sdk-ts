@@ -280,6 +280,16 @@ export class PreflightPin {
         this.taintedReason = "baseline path is not a regular file";
       } else {
         this.loadIntoIndex();
+        // An empty-but-valid store after we have pinned here is not a first run.
+        if (
+          this.index.size === 0 &&
+          this.taintedReason === null &&
+          !this.newerFormat &&
+          wasEverPinned(this.path)
+        ) {
+          this.taintedReason =
+            "baseline file has no pins for a server that was pinned before";
+        }
         this.diskSig = this.signature();
       }
     }
@@ -394,6 +404,22 @@ export class PreflightPin {
     }
   }
 
+  private emptyStoreIsUnreadable(
+    records: PinnedTool[],
+    savedIndex: Map<string, PinnedTool>,
+  ): boolean {
+    const ever = this.path !== null && wasEverPinned(this.path);
+    if (records.length === 0 && (ever || savedIndex.size > 0)) return true;
+    const serversMem = new Set<string>();
+    for (const pin of savedIndex.values()) serversMem.add(pin.serverId);
+    if (serversMem.size === 0) return false;
+    const serversDisk = new Set(records.map((p) => p.serverId));
+    for (const sid of serversMem) {
+      if (!serversDisk.has(sid)) return true;
+    }
+    return false;
+  }
+
   private recordsFromDisk(): PinnedTool[] | null {
     if (this.path === null) return [];
     const st = this.lstatStore(this.path);
@@ -427,6 +453,11 @@ export class PreflightPin {
     this.index = savedIndex;
     this.taintedReason = savedTaint;
     this.newerFormat = savedUnsupported;
+    if (this.emptyStoreIsUnreadable(records, savedIndex)) {
+      this.taintedReason =
+        "baseline file has no pins for a server that was pinned before";
+      return null;
+    }
     return records;
   }
 
@@ -578,6 +609,32 @@ function wasEverPinned(storePath: string): boolean {
   }
 }
 
+function writeEverPinnedStores(indexPath: string, stores: string[]): void {
+  const directory = dirname(indexPath) || ".";
+  mkdirSync(directory, { recursive: true });
+  const suffix = randomBytes(8).toString("hex");
+  const tmp = join(directory, `.ever-pinned.${process.pid}.${suffix}.tmp`);
+  let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+  if (typeof constants.O_NOFOLLOW === "number") {
+    flags |= constants.O_NOFOLLOW;
+  }
+  const fd = openSync(tmp, flags, 0o600);
+  try {
+    writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
+    fsyncSync(fd);
+    closeSync(fd);
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, indexPath);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // already removed
+    }
+    throw err;
+  }
+}
+
 function recordEverPinned(storePath: string): void {
   const indexPath = everPinnedPath(storePath);
   const name = basename(storePath);
@@ -594,28 +651,35 @@ function recordEverPinned(storePath: string): void {
     }
     if (stores.includes(name)) return;
     stores.push(name);
-    const directory = dirname(indexPath) || ".";
-    mkdirSync(directory, { recursive: true });
-    const suffix = randomBytes(8).toString("hex");
-    const tmp = join(directory, `.ever-pinned.${process.pid}.${suffix}.tmp`);
-    let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
-    if (typeof constants.O_NOFOLLOW === "number") {
-      flags |= constants.O_NOFOLLOW;
-    }
-    const fd = openSync(tmp, flags, 0o600);
+    writeEverPinnedStores(indexPath, stores);
+  } catch {
+    return;
+  }
+}
+
+/** Remove ``storePath`` from the ever-pinned index. */
+export function clearEverPinned(storePath: string): void {
+  const indexPath = everPinnedPath(storePath);
+  const name = basename(storePath);
+  try {
+    let raw: unknown;
     try {
-      writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
-      fsyncSync(fd);
-      closeSync(fd);
-      chmodSync(tmp, 0o600);
-      renameSync(tmp, indexPath);
-    } catch (err) {
+      raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
+    } catch {
+      return;
+    }
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+    const found = (raw as Record<string, unknown>)["stores"];
+    if (!Array.isArray(found)) return;
+    const stores = found.filter((s): s is string => typeof s === "string" && s !== name);
+    if (stores.length > 0) {
+      writeEverPinnedStores(indexPath, stores);
+    } else {
       try {
-        unlinkSync(tmp);
+        unlinkSync(indexPath);
       } catch {
-        // already removed
+        // best effort
       }
-      throw err;
     }
   } catch {
     return;

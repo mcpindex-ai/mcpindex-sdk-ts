@@ -17,10 +17,11 @@ export {
   pendingClass,
   pendingPath,
   recordPending,
+  resetPins,
   CLASS_CHANGED,
   CLASS_FLOATING,
 } from "./pendingStore.js";
-export type { PendingRecord } from "./pendingStore.js";
+export type { PendingRecord, ResetPinsResult } from "./pendingStore.js";
 
 export { AmbientMode, AmbientNotifier, resolveMode } from "./ambient.js";
 export type {
