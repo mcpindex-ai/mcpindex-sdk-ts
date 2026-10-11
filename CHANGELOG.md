@@ -12,8 +12,7 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 - Under guard and strict, a new tool on an already-pinned server is left out of the tool list and cannot be called until it is reviewed. `approvePending(name, digest)` pins the stored definition when the digest over its full public contract matches. `onWithheld` carries that digest.
 - A change that arrives without an upgrade is held for review and is never bulk-approved. `newTools: "tofu"` restores first-sight trust for that wrapper.
 - The file pin store takes a lock and merges from disk before each write, so a Python CLI approval and a TypeScript process on the same pin file cannot lose each other's pins. The lock uses only Node built-ins and works on Windows. The package has no runtime dependencies. Pins may carry an optional `launchKey`.
-- A pin file that goes missing or stops being a regular file while the process runs is treated as tampered: pins already loaded are kept and every call holds until restart.
-- A pin store swapped at runtime for an empty or foreign valid file is treated the same way when this server was already pinned. `resetPins(serverId)` clears the store and its ever-pinned record so the next list can pin again.
+- A pin store that goes missing, stops being a regular file, or no longer holds pins for a server it held before is treated as tampered, whether that happens while the process runs or before a restart. Pins already loaded are kept, every call holds, and the store refuses writes. `resetPins(serverId)` is the deliberate recovery: it clears the store and its ever-pinned record so the next list pins from the current contract.
 - A pin reload that fails under a lock timeout classifies held tools as changed-without-upgrade, not floating.
 - The SDK client's own listChanged refresh is still not filtered.
 

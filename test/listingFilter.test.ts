@@ -288,6 +288,30 @@ test("empty or foreign store swap does not first-sight new tools", async () => {
   }
 });
 
+test("a foreign store at restart taints; a new server in a shared store does not", async () => {
+  const { renameSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-foreign-restart-"));
+  const tool = { name: "echo", description: "one", inputSchema: { type: "object", properties: {} } };
+  const session = { listTools: async () => ({ tools: [tool] }) };
+  try {
+    const mine = join(dir, "srv.json");
+    const theirs = join(dir, "other.json");
+    await wrap(session, { pin: new PreflightPin(mine), serverId: "srv" }).listTools();
+    await wrap(session, { pin: new PreflightPin(theirs), serverId: "other" }).listTools();
+    renameSync(theirs, mine);
+    const pin = new PreflightPin(mine);
+    new Gate({ pin, serverId: "srv", posture: Posture.GUARD });
+    assert.match(pin.tainted ?? "", /pinned before/);
+    const shared = join(dir, "shared.json");
+    await wrap(session, { pin: new PreflightPin(shared), serverId: "a" }).listTools();
+    const again = new PreflightPin(shared);
+    new Gate({ pin: again, serverId: "b", posture: Posture.GUARD });
+    assert.equal(again.tainted, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("resetPins clears a tainted empty store so the next list can pin", async () => {
   const { writeFileSync } = await import("node:fs");
   const { resetPins } = await import("../src/pendingStore.js");

@@ -824,6 +824,8 @@ export class Gate {
   constructor(opts: GateOptions) {
     this.pin = opts.pin;
     this._serverId = opts.serverId;
+    // A store swapped for one that holds only other servers' pins is not a first run.
+    this.pin.expectServer(opts.serverId);
     this.failOpen = opts.failOpen ?? false;
     this.autoAcceptBenign = opts.autoAcceptBenign ?? true;
     this.now = opts.now ?? utcNowIso;

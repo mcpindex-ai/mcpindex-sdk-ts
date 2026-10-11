@@ -295,6 +295,24 @@ export class PreflightPin {
     }
   }
 
+  /**
+   * Taint the store when it holds no pins for `serverId` but has before.
+   *
+   * The constructor check only sees the whole file. A valid store that holds
+   * another server's pins passes it, so the per-server check runs once the
+   * server id is known (the Gate calls this). An index written before server
+   * ids were recorded never taints here.
+   */
+  expectServer(serverId: string): void {
+    if (this.path === null || this.taintedReason !== null || this.newerFormat) return;
+    for (const pin of this.index.values()) {
+      if (pin.serverId === serverId) return;
+    }
+    if (wasEverPinnedServer(this.path, serverId)) {
+      this.taintedReason = "baseline file has no pins for a server that was pinned before";
+    }
+  }
+
   /** Closed reason when a baseline that should have been readable was not. */
   get tainted(): string | null {
     return this.taintedReason;
@@ -564,7 +582,7 @@ export class PreflightPin {
       }
       throw err;
     }
-    recordEverPinned(path);
+    recordEverPinned(path, new Set([...this.index.values()].map((p) => p.serverId)));
   }
 
   toolsFor(serverId: string): PinnedTool[] {
@@ -609,7 +627,38 @@ function wasEverPinned(storePath: string): boolean {
   }
 }
 
-function writeEverPinnedStores(indexPath: string, stores: string[]): void {
+type EverPinned = { stores: string[]; servers: Record<string, string[]> };
+
+function readEverPinned(indexPath: string): EverPinned {
+  const out: EverPinned = { stores: [], servers: {} };
+  try {
+    const raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
+    const stores = (raw as Record<string, unknown>)["stores"];
+    if (Array.isArray(stores)) out.stores = stores.filter((s): s is string => typeof s === "string");
+    const servers = (raw as Record<string, unknown>)["servers"];
+    if (servers !== null && typeof servers === "object" && !Array.isArray(servers)) {
+      for (const [key, ids] of Object.entries(servers as Record<string, unknown>)) {
+        if (Array.isArray(ids)) out.servers[key] = ids.filter((i): i is string => typeof i === "string");
+      }
+    }
+  } catch {
+    // an absent or unreadable index is no evidence
+  }
+  return out;
+}
+
+/** True iff this store has held pins for `serverId`. Fails open like `wasEverPinned`. */
+function wasEverPinnedServer(storePath: string, serverId: string): boolean {
+  const { servers } = readEverPinned(everPinnedPath(storePath));
+  return (servers[basename(storePath)] ?? []).includes(serverId);
+}
+
+function writeEverPinnedStores(
+  indexPath: string,
+  stores: string[],
+  servers: Record<string, string[]> = {},
+): void {
   const directory = dirname(indexPath) || ".";
   mkdirSync(directory, { recursive: true });
   const suffix = randomBytes(8).toString("hex");
@@ -620,7 +669,14 @@ function writeEverPinnedStores(indexPath: string, stores: string[]): void {
   }
   const fd = openSync(tmp, flags, 0o600);
   try {
-    writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
+    const body: Record<string, unknown> = { stores: [...stores].sort() };
+    const keys = Object.keys(servers).filter((k) => servers[k]!.length > 0);
+    if (keys.length > 0) {
+      const sorted: Record<string, string[]> = {};
+      for (const key of keys.sort()) sorted[key] = [...new Set(servers[key])].sort();
+      body["servers"] = sorted;
+    }
+    writeSync(fd, Buffer.from(stableStringify(body), "utf8"));
     fsyncSync(fd);
     closeSync(fd);
     chmodSync(tmp, 0o600);
@@ -635,23 +691,17 @@ function writeEverPinnedStores(indexPath: string, stores: string[]): void {
   }
 }
 
-function recordEverPinned(storePath: string): void {
+function recordEverPinned(storePath: string, serverIds: Set<string> = new Set()): void {
   const indexPath = everPinnedPath(storePath);
   const name = basename(storePath);
   try {
-    let stores: string[] = [];
-    try {
-      const raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
-      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-        const found = (raw as Record<string, unknown>)["stores"];
-        if (Array.isArray(found)) stores = found.filter((s): s is string => typeof s === "string");
-      }
-    } catch {
-      stores = [];
-    }
-    if (stores.includes(name)) return;
-    stores.push(name);
-    writeEverPinnedStores(indexPath, stores);
+    const { stores, servers } = readEverPinned(indexPath);
+    const known = new Set(servers[name] ?? []);
+    const wanted = new Set([...known, ...serverIds]);
+    if (stores.includes(name) && wanted.size === known.size) return;
+    if (!stores.includes(name)) stores.push(name);
+    if (wanted.size > 0) servers[name] = [...wanted].sort();
+    writeEverPinnedStores(indexPath, stores, servers);
   } catch {
     return;
   }
@@ -672,8 +722,10 @@ export function clearEverPinned(storePath: string): void {
     const found = (raw as Record<string, unknown>)["stores"];
     if (!Array.isArray(found)) return;
     const stores = found.filter((s): s is string => typeof s === "string" && s !== name);
+    const { servers } = readEverPinned(indexPath);
+    delete servers[name];
     if (stores.length > 0) {
-      writeEverPinnedStores(indexPath, stores);
+      writeEverPinnedStores(indexPath, stores, servers);
     } else {
       try {
         unlinkSync(indexPath);
