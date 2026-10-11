@@ -115,6 +115,31 @@ export function missingExtraFields(
   return out;
 }
 
+// The first marker version that recorded every listed field.
+const FIRST_COMPLETE_VERSION = 2;
+
+/** Whether a pin's marker means it recorded every field listed at the time. */
+export function isComplete(version: number | undefined): boolean {
+  return version !== undefined && version >= FIRST_COMPLETE_VERSION && version <= CONTRACT_FIELDS_VERSION;
+}
+
+/** What a pin at `version` may record once from a matching list (Python
+ * `fields_to_backfill`): everything it lacks when unmarked, only a non-string
+ * title when it is a v2 pin. */
+export function fieldsToBackfill(
+  pinnedSchema: Record<string, unknown>,
+  observed: Record<string, unknown>,
+  version: number | undefined,
+): Record<string, unknown> {
+  if (!isComplete(version)) return missingExtraFields(pinnedSchema, observed);
+  const out: Record<string, unknown> = {};
+  if (version === 2 && !("title" in pinnedSchema)) {
+    const title = observed["title"];
+    if (title !== undefined && title !== null && typeof title !== "string") setOwn(out, "title", title);
+  }
+  return out;
+}
+
 /** A server-chosen key, quoted and escaped for a reason string (Python
  * `json.dumps(key, ensure_ascii=True)`). */
 export function fieldLabel(key: string): string {

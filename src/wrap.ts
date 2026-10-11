@@ -488,10 +488,11 @@ class Interceptor {
   listTools(target: SessionLike, args: unknown[]): unknown {
     const window = this.openListingWindow(cursorOfList(args));
     const epoch = this.listEpoch;
+    const firstSight = this.firstSightNames;
     const raw = this.rawListTools ?? (target.listTools as AnyFn);
     const result = raw.apply(target, args);
-    if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch));
-    return this.filterList(result, window, epoch);
+    if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch, firstSight));
+    return this.filterList(result, window, epoch, firstSight);
   }
 
   /** Route the inner client's own listTools and its notification handlers
@@ -590,7 +591,12 @@ class Interceptor {
     return this.listingNames;
   }
 
-  private filterList(result: unknown, window: Set<string>, epoch: number = this.listEpoch): unknown {
+  private filterList(
+    result: unknown,
+    window: Set<string>,
+    epoch: number = this.listEpoch,
+    firstSight: Set<string> | null = null,
+  ): unknown {
     try {
       if (!carriesTools(result)) return result;
       const raw = rawToolEntries(result);
@@ -599,7 +605,7 @@ class Interceptor {
         return replaceToolList(result, []);
       }
       this.gate.reloadPins();
-      this.observe(result, epoch);
+      this.observe(result, epoch, firstSight);
       // A page that began after the last list_changed is a fresh read of the names it carries.
       if (epoch === this.listEpoch && this.staleNames.size > 0) {
         for (const defn of toolsFromResult(result)) this.staleNames.delete(defn["name"] as string);
@@ -658,7 +664,7 @@ class Interceptor {
     }
   }
 
-  private observe(result: unknown, epoch: number = this.listEpoch): void {
+  private observe(result: unknown, epoch: number = this.listEpoch, captured: Set<string> | null = null): void {
     try {
       const tools = toolsFromResult(result);
       this.gate.reloadPins();
@@ -666,7 +672,8 @@ class Interceptor {
       const storeEmpty = storePins.length === 0;
       // First-sight trust only when the pin store holds no pins for this server.
       // An empty prior snapshot is not enough on a cursor-bearing first list.
-      const window = this.firstSightNames;
+      // The window this request opened in, and only while it is still the current one.
+      const window = captured !== null && captured === this.firstSightNames ? captured : null;
       // Still the current window, and every pin the server holds was written by it.
       const firstSight =
         window !== null &&
@@ -698,7 +705,7 @@ class Interceptor {
       // The last page ends the window.
       const next =
         result !== null && typeof result === "object" ? (result as Record<string, unknown>)["nextCursor"] : undefined;
-      if (!next) this.firstSightNames = null;
+      if (!next && window !== null && this.firstSightNames === window) this.firstSightNames = null;
     } catch (exc) {
       this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.observe");
     }
@@ -845,9 +852,10 @@ class Interceptor {
     if (method === "tools/list") {
       const window = this.openListingWindow(cursorOfRequest(args[0]));
       const epoch = this.listEpoch;
+      const firstSight = this.firstSightNames;
       const result = (reqFn as AnyFn).apply(target, args);
-      if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch));
-      return this.filterList(result, window, epoch);
+      if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch, firstSight));
+      return this.filterList(result, window, epoch, firstSight);
     }
     if (method !== "tools/call") {
       return (reqFn as AnyFn).apply(target, args);

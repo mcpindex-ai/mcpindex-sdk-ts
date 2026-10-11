@@ -7,7 +7,7 @@
  * kept alongside the first rather than overwriting it.
  */
 
-import { CONTRACT_FIELDS_VERSION } from "./contractFields.js";
+import { CONTRACT_FIELDS_VERSION, isComplete } from "./contractFields.js";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -288,7 +288,8 @@ function pinRecord(pin: PreflightPin, rec: PendingRecord): PinnedTool | null {
     via: "approve",
     launchKey: rec.launchKey,
     // Only a record stamped by this version marks the pin complete.
-    contractFields: rec.contractFields === CONTRACT_FIELDS_VERSION ? CONTRACT_FIELDS_VERSION : undefined,
+    // A record stamped 2 (0.17) is complete for the v2 field set and keeps that version.
+    contractFields: isComplete(rec.contractFields) ? rec.contractFields : undefined,
   };
   pin.put(written);
   return written;

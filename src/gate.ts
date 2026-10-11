@@ -30,7 +30,8 @@ import {
   comparedFields,
   comparedKeys,
   fieldLabel,
-  missingExtraFields,
+  fieldsToBackfill,
+  isComplete,
 } from "./contractFields.js";
 import { assess, blastRank } from "./risk.js";
 import { classifyToolDef } from "./actionClass.js";
@@ -952,7 +953,7 @@ export class Gate {
     try {
       if (hashTool(defn) !== existing.definitionHash) return;
       const schema = existing.schema as Record<string, unknown>;
-      const merged = { ...schema, ...missingExtraFields(schema, defn as Record<string, unknown>) };
+      const merged = { ...schema, ...fieldsToBackfill(schema, defn as Record<string, unknown>, existing.contractFields) };
       this.pin.put({ ...existing, schema: merged as ToolDef, contractFields: CONTRACT_FIELDS_VERSION });
     } catch {
       // a backfill must never break the listing
@@ -1116,7 +1117,7 @@ export class Gate {
     try {
       const before = comparedFields(pinnedRec);
       const after = comparedFields(observedRec);
-      for (const key of comparedKeys(pinnedRec, observedRec, pinned.contractFields === CONTRACT_FIELDS_VERSION)) {
+      for (const key of comparedKeys(pinnedRec, observedRec, isComplete(pinned.contractFields))) {
         if (!jsonEqual(before[key], after[key])) changed.push(key);
       }
     } catch (exc) {
