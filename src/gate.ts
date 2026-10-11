@@ -705,6 +705,8 @@ export interface GateOptions {
   verifier?: BehavioralVerifier | null;
   posture?: Posture;
   errors?: ErrorStore | null;
+  /** ``review`` (default) holds a new tool on an already-pinned server. ``tofu`` pins it. */
+  newTools?: "review" | "tofu";
 }
 
 const SCHEMA_TYPE_NAMES = new Set([
@@ -817,10 +819,13 @@ export class Gate {
   private readonly _verifier: BehavioralVerifier | null;
   private readonly _posture: Posture;
   private readonly errors: ErrorStore | null;
+  private readonly _newTools: "review" | "tofu";
 
   constructor(opts: GateOptions) {
     this.pin = opts.pin;
     this._serverId = opts.serverId;
+    // A store swapped for one that holds only other servers' pins is not a first run.
+    this.pin.expectServer(opts.serverId);
     this.failOpen = opts.failOpen ?? false;
     this.autoAcceptBenign = opts.autoAcceptBenign ?? true;
     this.now = opts.now ?? utcNowIso;
@@ -829,6 +834,7 @@ export class Gate {
     this._verifier = opts.verifier ?? null;
     this._posture = opts.posture ?? Posture.GUARD;
     this.errors = opts.errors ?? null;
+    this._newTools = opts.newTools ?? "review";
   }
 
   get serverId(): string {
@@ -841,6 +847,9 @@ export class Gate {
   get posture(): Posture {
     return this._posture;
   }
+  get newTools(): "review" | "tofu" {
+    return this._newTools;
+  }
   get verifier(): BehavioralVerifier | null {
     return this._verifier;
   }
@@ -848,12 +857,29 @@ export class Gate {
     return this._ownership;
   }
 
+  /** The pin store for approvePending and other wrapper helpers. */
+  get pinStore(): PreflightPin {
+    return this.pin;
+  }
+
+  reloadPins(): void {
+    this.pin.reloadIfChanged();
+  }
+
+  pinnedTools(): PinnedTool[] {
+    return this.pin.toolsFor(this._serverId);
+  }
+
   pinFor(name: string): PinnedTool | null {
     return this.pin.get(this._serverId, name);
   }
 
-  /** TOFU-pin one observed tool if not already pinned. */
-  observe(name: string, defn: ToolDef): void {
+  /**
+   * Pin one observed tool if it has no pin yet. The caller decides which tools
+   * reach this method. On an already-pinned server, guard and strict do not call
+   * it for a tool that was not pinned before the current list.
+   */
+  observe(name: string, defn: ToolDef, opts?: { launchKey?: string }): void {
     if (this.pin.get(this._serverId, name) === null) {
       const definitionHash = hashTool(defn);
       this.pin.put({
@@ -862,6 +888,7 @@ export class Gate {
         definitionHash,
         pinnedAt: this.now(),
         schema: defn,
+        launchKey: opts?.launchKey,
       });
       // M1 drift telemetry — emit the COVERAGE (pin) signal once per first-seen tool.
       // Opt-in, fail-open, off-path: recordPin never throws and never touches the network
@@ -873,13 +900,20 @@ export class Gate {
     }
   }
 
-  repinOne(name: string, observed: ToolDef): PinnedTool {
+  repinOne(name: string, observed: ToolDef, opts?: { via?: string; launchKey?: string }): PinnedTool {
+    const existing = this.pin.get(this._serverId, name);
+    const keptKey =
+      opts?.launchKey !== undefined
+        ? opts.launchKey
+        : existing?.launchKey;
     const p: PinnedTool = {
       serverId: this._serverId,
       toolName: name,
       definitionHash: hashTool(observed),
       pinnedAt: this.now(),
       schema: observed,
+      via: opts?.via,
+      launchKey: keptKey,
     };
     this.pin.put(p);
     return p;

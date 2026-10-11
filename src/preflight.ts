@@ -5,10 +5,24 @@
  * PUBLIC schema for diff detail) — NEVER a token, by construction.
  */
 
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { withExclusiveLock } from "./fileLock.js";
 import { mdText } from "./render.js";
 import { hashTool } from "./canonical.js";
 import type { Change } from "./schemaDiff.js";
@@ -35,6 +49,11 @@ export interface PinnedTool {
   readonly via?: string;
   /** Kept so a pin written by the Python store is not stripped on the next flush. */
   readonly classification?: unknown;
+  /**
+   * Exact launch key when the pin was written, for example ``npm:pkg@1.2.3``.
+   * Absent on pins written before this field; those behave as floating.
+   */
+  readonly launchKey?: string;
 }
 
 export function utcNowIso(): string {
@@ -238,19 +257,60 @@ function renderVerdictBody(v: PreflightVerdict): string {
   return `HOLD ${sid}/${tool} — ${mdText(v.reason)}`;
 }
 
-/** In-memory pin store (the TS port keeps it in-memory: the SDK wrapper pins a
- * live session; durable JSON persistence is out of scope for the wrapper). Keyed
- * by `(serverId, toolName)`. Stores ONLY hashes (+ optional PUBLIC schema). */
+/** Pin store keyed by `(serverId, toolName)`. Stores ONLY hashes (+ optional
+ * PUBLIC schema). A path argument persists to JSON under a sibling flock so a
+ * Python CLI approval and another process cannot lose each other's writes. */
 export class PreflightPin {
-  private readonly index = new Map<string, PinnedTool>();
+  private index = new Map<string, PinnedTool>();
   private taintedReason: string | null = null;
   private newerFormat = false;
+  private diskSig: { ino: number; mtimeNs: number } | null = null;
   /** On-disk baseline, or null for an in-memory pin. */
   readonly path: string | null;
 
   constructor(path?: string | null) {
     this.path = path ?? null;
-    if (this.path !== null) this.load();
+    if (this.path !== null) {
+      const st = this.lstatStore(this.path);
+      if (st === null) {
+        if (wasEverPinned(this.path)) {
+          this.taintedReason = "baseline file is missing but this server was pinned before";
+        }
+      } else if (!st.isFile()) {
+        this.taintedReason = "baseline path is not a regular file";
+      } else {
+        this.loadIntoIndex();
+        // An empty-but-valid store after we have pinned here is not a first run.
+        if (
+          this.index.size === 0 &&
+          this.taintedReason === null &&
+          !this.newerFormat &&
+          wasEverPinned(this.path)
+        ) {
+          this.taintedReason =
+            "baseline file has no pins for a server that was pinned before";
+        }
+        this.diskSig = this.signature();
+      }
+    }
+  }
+
+  /**
+   * Taint the store when it holds no pins for `serverId` but has before.
+   *
+   * The constructor check only sees the whole file. A valid store that holds
+   * another server's pins passes it, so the per-server check runs once the
+   * server id is known (the Gate calls this). An index written before server
+   * ids were recorded never taints here.
+   */
+  expectServer(serverId: string): void {
+    if (this.path === null || this.taintedReason !== null || this.newerFormat) return;
+    for (const pin of this.index.values()) {
+      if (pin.serverId === serverId) return;
+    }
+    if (wasEverPinnedServer(this.path, serverId)) {
+      this.taintedReason = "baseline file has no pins for a server that was pinned before";
+    }
   }
 
   /** Closed reason when a baseline that should have been readable was not. */
@@ -271,34 +331,61 @@ export class PreflightPin {
     return `${serverId}\u001f${toolName}`;
   }
 
-  get(serverId: string, toolName: string): PinnedTool | null {
-    return this.index.get(this.key(serverId, toolName)) ?? null;
+  private lstatStore(path: string): { isFile(): boolean; ino: number; mtimeMs: number } | null {
+    try {
+      const st = lstatSync(path);
+      return {
+        isFile: () => st.isFile(),
+        ino: Number(st.ino),
+        mtimeMs: Number(st.mtimeMs),
+      };
+    } catch {
+      return null;
+    }
   }
 
-  put(pin: PinnedTool): void {
-    this.index.set(this.key(pin.serverId, pin.toolName), pin);
-    this.flush();
+  private signature(): { ino: number; mtimeNs: number } | null {
+    if (this.path === null) return null;
+    const st = this.lstatStore(this.path);
+    if (st === null || !st.isFile()) return null;
+    return { ino: st.ino, mtimeNs: Math.trunc(st.mtimeMs * 1_000_000) };
   }
 
-  private load(): void {
+  private parsePin(row: Record<string, unknown>): PinnedTool | null {
+    const sid = row["server_id"];
+    const tname = row["tool_name"];
+    const dh = row["definition_hash"];
+    const pinnedAt = row["pinned_at"];
+    if (
+      typeof sid !== "string" ||
+      typeof tname !== "string" ||
+      typeof dh !== "string" ||
+      typeof pinnedAt !== "string"
+    ) {
+      return null;
+    }
+    const schema = row["schema"];
+    const via = row["via"];
+    const launchKey = row["launch_key"];
+    return {
+      serverId: sid,
+      toolName: tname,
+      definitionHash: dh,
+      pinnedAt,
+      schema:
+        schema !== null && typeof schema === "object" && !Array.isArray(schema)
+          ? (schema as ToolDef)
+          : null,
+      via: typeof via === "string" && via.length > 0 ? via : "tofu",
+      classification: row["classification"],
+      launchKey:
+        typeof launchKey === "string" && launchKey.length > 0 ? launchKey : undefined,
+    };
+  }
+
+  private loadIntoIndex(): void {
     const path = this.path;
     if (path === null) return;
-    let st: ReturnType<typeof lstatSync> | null = null;
-    try {
-      st = lstatSync(path);
-    } catch {
-      st = null;
-    }
-    if (st === null) {
-      if (wasEverPinned(path)) {
-        this.taintedReason = "baseline file is missing but this server was pinned before";
-      }
-      return;
-    }
-    if (!st.isFile()) {
-      this.taintedReason = "baseline path is not a regular file";
-      return;
-    }
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(path, "utf8"));
@@ -326,40 +413,137 @@ export class PreflightPin {
         this.taintedReason = "baseline file contains an unreadable record";
         continue;
       }
-      const row = rec as Record<string, unknown>;
-      const sid = row["server_id"];
-      const tname = row["tool_name"];
-      const dh = row["definition_hash"];
-      const pinnedAt = row["pinned_at"];
-      if (
-        typeof sid !== "string" ||
-        typeof tname !== "string" ||
-        typeof dh !== "string" ||
-        typeof pinnedAt !== "string"
-      ) {
+      const pin = this.parsePin(rec as Record<string, unknown>);
+      if (pin === null) {
         this.taintedReason = "baseline file contains an unreadable record";
         continue;
       }
-      const schema = row["schema"];
-      const via = row["via"];
-      const pin: PinnedTool = {
-        serverId: sid,
-        toolName: tname,
-        definitionHash: dh,
-        pinnedAt,
-        schema: schema !== null && typeof schema === "object" && !Array.isArray(schema)
-          ? (schema as ToolDef)
-          : null,
-        via: typeof via === "string" && via.length > 0 ? via : "tofu",
-        classification: row["classification"],
-      };
-      this.index.set(this.key(sid, tname), pin);
+      this.index.set(this.key(pin.serverId, pin.toolName), pin);
     }
+  }
+
+  private emptyStoreIsUnreadable(
+    records: PinnedTool[],
+    savedIndex: Map<string, PinnedTool>,
+  ): boolean {
+    const ever = this.path !== null && wasEverPinned(this.path);
+    if (records.length === 0 && (ever || savedIndex.size > 0)) return true;
+    const serversMem = new Set<string>();
+    for (const pin of savedIndex.values()) serversMem.add(pin.serverId);
+    if (serversMem.size === 0) return false;
+    const serversDisk = new Set(records.map((p) => p.serverId));
+    for (const sid of serversMem) {
+      if (!serversDisk.has(sid)) return true;
+    }
+    return false;
+  }
+
+  private recordsFromDisk(): PinnedTool[] | null {
+    if (this.path === null) return [];
+    const st = this.lstatStore(this.path);
+    if (st === null) {
+      if (wasEverPinned(this.path) || this.index.size > 0) {
+        this.taintedReason =
+          "baseline file is missing but this server was pinned before";
+        return null;
+      }
+      return [];
+    }
+    if (!st.isFile()) {
+      this.taintedReason = "baseline path is not a regular file";
+      return null;
+    }
+    const savedIndex = this.index;
+    const savedTaint = this.taintedReason;
+    const savedUnsupported = this.newerFormat;
+    this.index = new Map();
+    this.taintedReason = null;
+    this.newerFormat = false;
+    this.loadIntoIndex();
+    if (this.newerFormat || this.taintedReason !== null) {
+      const loadTaint = this.taintedReason;
+      this.index = savedIndex;
+      this.taintedReason = loadTaint ?? savedTaint;
+      this.newerFormat = savedUnsupported || this.newerFormat;
+      return null;
+    }
+    const records = [...this.index.values()];
+    this.index = savedIndex;
+    this.taintedReason = savedTaint;
+    this.newerFormat = savedUnsupported;
+    if (this.emptyStoreIsUnreadable(records, savedIndex)) {
+      this.taintedReason =
+        "baseline file has no pins for a server that was pinned before";
+      return null;
+    }
+    return records;
+  }
+
+  private reloadHoldingLock(): void {
+    if (this.path === null) return;
+    const sig = this.signature();
+    if (
+      sig !== null &&
+      this.diskSig !== null &&
+      sig.ino === this.diskSig.ino &&
+      sig.mtimeNs === this.diskSig.mtimeNs
+    ) {
+      return;
+    }
+    withExclusiveLock(this.path, () => {
+      const again = this.signature();
+      if (
+        again !== null &&
+        this.diskSig !== null &&
+        again.ino === this.diskSig.ino &&
+        again.mtimeNs === this.diskSig.mtimeNs
+      ) {
+        return;
+      }
+      const records = this.recordsFromDisk();
+      if (records === null) return;
+      this.index = new Map(records.map((p) => [this.key(p.serverId, p.toolName), p]));
+      this.diskSig = this.signature();
+    });
+  }
+
+  /** Reload when another process replaced the file. No-op for an in-memory pin. */
+  reloadIfChanged(): void {
+    this.reloadHoldingLock();
+  }
+
+  get(serverId: string, toolName: string): PinnedTool | null {
+    this.reloadHoldingLock();
+    return this.index.get(this.key(serverId, toolName)) ?? null;
+  }
+
+  put(pin: PinnedTool): void {
+    if (this.path === null) {
+      this.index.set(this.key(pin.serverId, pin.toolName), pin);
+      return;
+    }
+    if (this.taintedReason !== null) {
+      throw new Error("pin store is tainted");
+    }
+    withExclusiveLock(this.path, () => {
+      if (this.taintedReason !== null) {
+        throw new Error("pin store is tainted");
+      }
+      const records = this.recordsFromDisk();
+      if (records === null) throw new Error("pin store is unreadable");
+      this.index = new Map(records.map((p) => [this.key(p.serverId, p.toolName), p]));
+      this.index.set(this.key(pin.serverId, pin.toolName), pin);
+      this.flush();
+      this.diskSig = this.signature();
+    });
   }
 
   private flush(): void {
     const path = this.path;
     if (path === null) return;
+    if (this.taintedReason !== null) {
+      throw new Error("pin store is tainted");
+    }
     const pins = [...this.index.values()].map((p) => {
       const row: Record<string, unknown> = {
         server_id: p.serverId,
@@ -370,17 +554,25 @@ export class PreflightPin {
       if (p.schema !== null) row["schema"] = p.schema;
       if (p.via !== undefined && p.via !== "tofu") row["via"] = p.via;
       if (p.classification !== undefined) row["classification"] = p.classification;
+      if (p.launchKey !== undefined && p.launchKey.length > 0) row["launch_key"] = p.launchKey;
       return row;
     });
     const payload = { version: PIN_STORE_VERSION, pins };
     const directory = dirname(path) || ".";
     mkdirSync(directory, { recursive: true });
-    const tmp = join(directory, `.${basename(path)}.${process.pid}.tmp`);
+    const suffix = randomBytes(8).toString("hex");
+    const tmp = join(directory, `.${basename(path)}.${process.pid}.${suffix}.tmp`);
     const encoded = Buffer.from(stableStringify(payload), "utf8");
-    const fd = openSync(tmp, "w", 0o600);
+    let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+    if (typeof constants.O_NOFOLLOW === "number") {
+      flags |= constants.O_NOFOLLOW;
+    }
+    const fd = openSync(tmp, flags, 0o600);
     try {
       writeSync(fd, encoded);
+      fsyncSync(fd);
       closeSync(fd);
+      chmodSync(tmp, 0o600);
       renameSync(tmp, path);
     } catch (err) {
       try {
@@ -390,14 +582,16 @@ export class PreflightPin {
       }
       throw err;
     }
-    recordEverPinned(path);
+    recordEverPinned(path, new Set([...this.index.values()].map((p) => p.serverId)));
   }
 
   toolsFor(serverId: string): PinnedTool[] {
+    this.reloadHoldingLock();
     return [...this.index.values()].filter((p) => p.serverId === serverId);
   }
 
   allPins(): PinnedTool[] {
+    this.reloadHoldingLock();
     return [...this.index.values()];
   }
 }
@@ -433,39 +627,111 @@ function wasEverPinned(storePath: string): boolean {
   }
 }
 
-function recordEverPinned(storePath: string): void {
+type EverPinned = { stores: string[]; servers: Record<string, string[]> };
+
+function readEverPinned(indexPath: string): EverPinned {
+  const out: EverPinned = { stores: [], servers: {} };
+  try {
+    const raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
+    const stores = (raw as Record<string, unknown>)["stores"];
+    if (Array.isArray(stores)) out.stores = stores.filter((s): s is string => typeof s === "string");
+    const servers = (raw as Record<string, unknown>)["servers"];
+    if (servers !== null && typeof servers === "object" && !Array.isArray(servers)) {
+      for (const [key, ids] of Object.entries(servers as Record<string, unknown>)) {
+        if (Array.isArray(ids)) out.servers[key] = ids.filter((i): i is string => typeof i === "string");
+      }
+    }
+  } catch {
+    // an absent or unreadable index is no evidence
+  }
+  return out;
+}
+
+/** True iff this store has held pins for `serverId`. Fails open like `wasEverPinned`. */
+function wasEverPinnedServer(storePath: string, serverId: string): boolean {
+  const { servers } = readEverPinned(everPinnedPath(storePath));
+  return (servers[basename(storePath)] ?? []).includes(serverId);
+}
+
+function writeEverPinnedStores(
+  indexPath: string,
+  stores: string[],
+  servers: Record<string, string[]> = {},
+): void {
+  const directory = dirname(indexPath) || ".";
+  mkdirSync(directory, { recursive: true });
+  const suffix = randomBytes(8).toString("hex");
+  const tmp = join(directory, `.ever-pinned.${process.pid}.${suffix}.tmp`);
+  let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+  if (typeof constants.O_NOFOLLOW === "number") {
+    flags |= constants.O_NOFOLLOW;
+  }
+  const fd = openSync(tmp, flags, 0o600);
+  try {
+    const body: Record<string, unknown> = { stores: [...stores].sort() };
+    const keys = Object.keys(servers).filter((k) => servers[k]!.length > 0);
+    if (keys.length > 0) {
+      const sorted: Record<string, string[]> = {};
+      for (const key of keys.sort()) sorted[key] = [...new Set(servers[key])].sort();
+      body["servers"] = sorted;
+    }
+    writeSync(fd, Buffer.from(stableStringify(body), "utf8"));
+    fsyncSync(fd);
+    closeSync(fd);
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, indexPath);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // already removed
+    }
+    throw err;
+  }
+}
+
+function recordEverPinned(storePath: string, serverIds: Set<string> = new Set()): void {
   const indexPath = everPinnedPath(storePath);
   const name = basename(storePath);
   try {
-    let stores: string[] = [];
+    const { stores, servers } = readEverPinned(indexPath);
+    const known = new Set(servers[name] ?? []);
+    const wanted = new Set([...known, ...serverIds]);
+    if (stores.includes(name) && wanted.size === known.size) return;
+    if (!stores.includes(name)) stores.push(name);
+    if (wanted.size > 0) servers[name] = [...wanted].sort();
+    writeEverPinnedStores(indexPath, stores, servers);
+  } catch {
+    return;
+  }
+}
+
+/** Remove ``storePath`` from the ever-pinned index. */
+export function clearEverPinned(storePath: string): void {
+  const indexPath = everPinnedPath(storePath);
+  const name = basename(storePath);
+  try {
+    let raw: unknown;
     try {
-      const raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
-      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-        const found = (raw as Record<string, unknown>)["stores"];
-        if (Array.isArray(found)) stores = found.filter((s): s is string => typeof s === "string");
-      }
+      raw = JSON.parse(readFileSync(indexPath, "utf8")) as unknown;
     } catch {
-      stores = [];
+      return;
     }
-    if (stores.includes(name)) return;
-    stores.push(name);
-    const directory = dirname(indexPath) || ".";
-    mkdirSync(directory, { recursive: true });
-    const tmp = join(directory, `.ever-pinned.${process.pid}.tmp`);
-    const fd = openSync(tmp, "w", 0o600);
-    try {
-      writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
-      fsyncSync(fd);
-      closeSync(fd);
-      chmodSync(tmp, 0o600);
-      renameSync(tmp, indexPath);
-    } catch (err) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+    const found = (raw as Record<string, unknown>)["stores"];
+    if (!Array.isArray(found)) return;
+    const stores = found.filter((s): s is string => typeof s === "string" && s !== name);
+    const { servers } = readEverPinned(indexPath);
+    delete servers[name];
+    if (stores.length > 0) {
+      writeEverPinnedStores(indexPath, stores, servers);
+    } else {
       try {
-        unlinkSync(tmp);
+        unlinkSync(indexPath);
       } catch {
-        // already removed
+        // best effort
       }
-      throw err;
     }
   } catch {
     return;
@@ -494,4 +760,4 @@ export function defaultPinStorePath(serverId: string): string {
   return join(root, "pins", `${sanitizeServerId(serverId)}.json`);
 }
 
-export { hashTool };
+export { hashTool, approvalDigest } from "./canonical.js";

@@ -11,7 +11,7 @@
  * here: the SDK calls listTools on the inner client.
  */
 
-import { hashTool } from "./canonical.js";
+import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
 import { Decision, type ToolDef } from "./preflight.js";
 
@@ -27,6 +27,9 @@ export interface WithheldNotice {
   toolName: string;
   reason: string;
   definitionHash: string;
+  definition: ToolDef | null;
+  /** False for a duplicate name, a wrong JSON type, or a check that raised. */
+  reviewable: boolean;
 }
 
 export interface ListingOutcome {
@@ -93,11 +96,14 @@ export function filterListing(gate: Gate, entries: unknown[], seen: Set<string>)
     try {
       notice = judge(gate, entry, name, counts, seen);
     } catch {
+      const contract = publicContract(entry);
       notice = {
         serverId: gate.serverId,
         toolName: name,
         reason: "listing check failed",
-        definitionHash: hashOrBlank(publicContract(entry)),
+        definitionHash: hashOrBlank(contract),
+        definition: contract,
+        reviewable: false,
       };
     }
     if (notice === null) kept.push(entry);
@@ -131,18 +137,25 @@ function judge(
 }
 
 function notice(gate: Gate, name: string, reason: string, entry: unknown): WithheldNotice {
+  const contract = publicContract(entry);
+  const reviewable =
+    reason !== "listing check failed" &&
+    reason !== "duplicate name in this tool list" &&
+    !reason.endsWith("is not an object");
   return {
     serverId: gate.serverId,
     toolName: name,
     reason,
-    definitionHash: hashOrBlank(publicContract(entry)),
+    definitionHash: hashOrBlank(contract),
+    definition: contract,
+    reviewable,
   };
 }
 
 function hashOrBlank(contract: ToolDef | null): string {
   if (contract === null) return "";
   try {
-    return hashTool(contract);
+    return approvalDigest(contract);
   } catch {
     return "";
   }
@@ -174,6 +187,7 @@ function publicContract(entry: unknown): ToolDef | null {
   const schema = obj["inputSchema"];
   const ann = obj["annotations"];
   const outp = obj["outputSchema"];
+  const title = obj["title"];
   const record: ToolDef = {
     name,
     description: obj["description"] == null ? "" : String(obj["description"]),
@@ -181,5 +195,6 @@ function publicContract(entry: unknown): ToolDef | null {
   };
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
+  if (typeof title === "string" && title.length > 0) record["title"] = title;
   return record;
 }

@@ -19,6 +19,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   AmbientMode,
@@ -335,7 +338,10 @@ test("wrap(): the close() hook emits the session summary, then delegates to the 
 
 test("wrap(): a HOLD never emits an ambient line and never reaches the session", async () => {
   const prev = process.env.MCPINDEX_AMBIENT_NOTICE;
+  const prevState = process.env.MCPINDEX_STATE_DIR;
+  const stateDir = mkdtempSync(join(tmpdir(), "mcpindex-ambient-"));
   process.env.MCPINDEX_AMBIENT_NOTICE = "first_touch";
+  process.env.MCPINDEX_STATE_DIR = stateDir;
 
   const notes: AmbientNote[] = [];
   try {
@@ -368,6 +374,9 @@ test("wrap(): a HOLD never emits an ambient line and never reaches the session",
   } finally {
     if (prev === undefined) delete process.env.MCPINDEX_AMBIENT_NOTICE;
     else process.env.MCPINDEX_AMBIENT_NOTICE = prev;
+    if (prevState === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = prevState;
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });
 

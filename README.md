@@ -22,7 +22,7 @@ Peer dependency: `@modelcontextprotocol/sdk` >=1.0.0 <2 (the wrapper gates by se
 import { wrap } from '@mcp-index/sdk';
 
 // wrap an already-connected MCP client session
-const guarded = wrap(session);   // pins each tool's contract on first use (TOFU)
+const guarded = wrap(session);   // in-memory pins for this process only
 
 // use `guarded` exactly like `session`; a drifted contract is HELD before the call
 // fires. A PreflightHold surfaces (Guard/Strict) so you can route the agent to
@@ -43,6 +43,28 @@ const guarded = wrap(session, { serverId: 'my-mcp-server' }); // pins on disk
 `pinStore: 'memory'` keeps pins in the process even with a server id, and
 `pinStore: 'file'` forces the file store without one. You can also pass your own
 `PreflightPin` as `pin`.
+
+### New tools on an already-pinned server
+
+Under `guard` and `strict`, when a server you already pinned adds a tool, that
+tool is left out of the list and a call to it holds. It is not trusted mid-session on
+first sight. A process running as you that rewrites the pin store with its own
+well-formed pins is still trusted. `onWithheld` receives the definition digest. Pin
+the stored definition with `approvePending(name, digest)` when you have reviewed it:
+
+```ts
+const guarded = wrap(session, {
+  serverId: 'my-mcp-server',
+  onWithheld: (_server, name, _reason, digest) => {
+    // review the held tool, then:
+    // guarded.approvePending(name, digest);
+  },
+});
+```
+
+Pass `newTools: 'tofu'` to restore first-sight trust for new tools on that
+wrapper. The MCP client's own `listChanged` refresh calls the inner client and
+is not filtered.
 
 ## Sign in (optional) - `mcpindex login`
 
@@ -66,7 +88,12 @@ different host to override the default (`https://mcpindex.ai`).
 
 ## What it does
 
-- Pins each MCP tool's contract trust-on-first-use (TOFU), persisted across restarts.
+- Pins each MCP tool's contract on first sight in an empty store. With a `serverId`
+  (or `pinStore: 'file'`), those pins are kept on disk and survive restarts. Without
+  one they stay in memory for the process only.
+- Under `guard` and `strict`, a new tool on an already-pinned server is left out of
+  the list until you review it (`approvePending`). `newTools: 'tofu'` restores
+  first-sight trust for that wrapper.
 - Runs a **deterministic** contract-diff (the ChangeKind taxonomy: added-required-param,
   constraint-narrowed, annotation-flip-to-destructive, output-schema-changed,
   type/enum/removed, ...) plus an injection/exfil marker scan over input and output schema.
