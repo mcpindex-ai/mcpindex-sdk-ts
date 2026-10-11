@@ -63,8 +63,20 @@ const guarded = wrap(session, {
 ```
 
 Pass `newTools: 'tofu'` to restore first-sight trust for new tools on that
-wrapper. The MCP client's own `listChanged` refresh calls the inner client and
-is not filtered.
+wrapper.
+
+The MCP client's own `listChanged` refresh is filtered too: `wrap()` routes the
+inner client's `listTools` through the gate, so `onChanged` receives only the
+tools the list would show. After a `tools/list_changed` notification, calls hold
+under guard and strict until the list is read again. `wrap()` throws under guard
+and strict for a client object that rejects new properties (a frozen object).
+
+The pin records every top-level field a server lists for a tool (`title`,
+`icons`, `_meta`, `execution`, and any later field) and annotation keys other
+than the four hints. A change to one of them on a pinned tool leaves the tool
+out under guard and strict. A pin written before 0.17.0 records those fields
+once, from the first matching list. First-time `outputSchema` text on an
+otherwise unchanged tool is still shown.
 
 ## Sign in (optional) - `mcpindex login`
 

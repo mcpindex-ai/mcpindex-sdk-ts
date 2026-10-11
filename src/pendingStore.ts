@@ -7,6 +7,7 @@
  * kept alongside the first rather than overwriting it.
  */
 
+import { CONTRACT_FIELDS_VERSION } from "./contractFields.js";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -279,6 +280,7 @@ function pinRecord(pin: PreflightPin, rec: PendingRecord): PinnedTool | null {
     schema: rec.definition,
     via: "approve",
     launchKey: rec.launchKey,
+    contractFields: CONTRACT_FIELDS_VERSION,
   };
   pin.put(written);
   return written;

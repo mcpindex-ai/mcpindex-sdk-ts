@@ -5,6 +5,15 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.17.0 - 2026-10-11
+
+### Changed
+
+- The MCP client's own listChanged refresh is filtered. `wrap()` routes the inner client's `listTools` and its notification handlers through the gate, so `onChanged` receives only the tools the list would show, and calls hold under guard and strict after a `tools/list_changed` notification until the list is read again. This holds whether the client is wrapped before or after `connect()`. `wrap()` throws under guard and strict for a client object that rejects new properties.
+- Tool fields outside the definition hash are pinned and compared: `title`, `icons`, `_meta`, `execution`, any other top-level field, and annotation keys other than the four hints. Under guard and strict a change to one of them on a pinned tool leaves the tool out and holds its call. `approvalDigest` covers the same fields; a digest over the 0.16.0 field set is unchanged.
+- Pins carry `contractFields: 2`. A pin written before 0.17.0 records the new fields once, from the first list whose definition matches, and compares them after that.
+- Still not covered: first-time `outputSchema` text on an otherwise unchanged tool.
+
 ## 0.16.0 - 2026-10-11
 
 ### Changed

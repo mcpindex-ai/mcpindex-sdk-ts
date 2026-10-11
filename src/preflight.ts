@@ -54,6 +54,12 @@ export interface PinnedTool {
    * Absent on pins written before this field; those behave as floating.
    */
   readonly launchKey?: string;
+  /**
+   * 2 when `schema` holds every top-level field the server listed (see
+   * contractFields). Absent on older pins, whose missing fields are filled in
+   * from the first matching list instead of read as a change.
+   */
+  readonly contractFields?: number;
 }
 
 export function utcNowIso(): string {
@@ -367,6 +373,7 @@ export class PreflightPin {
     const schema = row["schema"];
     const via = row["via"];
     const launchKey = row["launch_key"];
+    const fieldsV = row["contract_fields"];
     return {
       serverId: sid,
       toolName: tname,
@@ -380,6 +387,7 @@ export class PreflightPin {
       classification: row["classification"],
       launchKey:
         typeof launchKey === "string" && launchKey.length > 0 ? launchKey : undefined,
+      contractFields: Number.isInteger(fieldsV) ? (fieldsV as number) : undefined,
     };
   }
 
@@ -555,6 +563,7 @@ export class PreflightPin {
       if (p.via !== undefined && p.via !== "tofu") row["via"] = p.via;
       if (p.classification !== undefined) row["classification"] = p.classification;
       if (p.launchKey !== undefined && p.launchKey.length > 0) row["launch_key"] = p.launchKey;
+      if (p.contractFields !== undefined) row["contract_fields"] = p.contractFields;
       return row;
     });
     const payload = { version: PIN_STORE_VERSION, pins };

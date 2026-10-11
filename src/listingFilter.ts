@@ -7,10 +7,11 @@
  * name, or an exception on that entry is left out. Monitor returns every entry.
  *
  * The caller owns the name set. A wrapper passes the set for the current
- * cursorless list. The client's own listChanged refresh does not come through
- * here: the SDK calls listTools on the inner client.
+ * cursorless list. The client's own listChanged refresh comes through here as
+ * well: `wrap()` routes the inner client's listTools to the wrapper.
  */
 
+import { extraFields } from "./contractFields.js";
 import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
 import { Decision, type ToolDef } from "./preflight.js";
@@ -187,7 +188,6 @@ function publicContract(entry: unknown): ToolDef | null {
   const schema = obj["inputSchema"];
   const ann = obj["annotations"];
   const outp = obj["outputSchema"];
-  const title = obj["title"];
   const record: ToolDef = {
     name,
     description: obj["description"] == null ? "" : String(obj["description"]),
@@ -195,6 +195,6 @@ function publicContract(entry: unknown): ToolDef | null {
   };
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
-  if (typeof title === "string" && title.length > 0) record["title"] = title;
+  Object.assign(record, extraFields(entry));
   return record;
 }

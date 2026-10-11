@@ -27,6 +27,7 @@
  * shared Gate reads only the PUBLIC contract.
  */
 
+import { extraFields } from "./contractFields.js";
 import {
   Gate,
   Ownership,
@@ -187,6 +188,13 @@ const DENY_DELEGATION: ReadonlySet<string> = new Set([
 
 type AnyFn = (...args: unknown[]) => unknown;
 
+const LIST_CHANGED = "notifications/tools/list_changed";
+// Marks a client whose listTools already routes through a wrapper, and a
+// notification handler already watched, so a second wrap does not stack.
+const REFRESH_HOOK = Symbol.for("mcpindex.wrap.refreshHook");
+const RELIST_CALL_REASON =
+  "the server said its tool list changed and the list has not been read again; the call holds until it is";
+
 interface SessionLike {
   listTools(...args: unknown[]): unknown;
   callTool(...args: unknown[]): unknown;
@@ -250,6 +258,7 @@ function toolToDict(entry: unknown): ToolDef | null {
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   const outp = attrOrKey(entry, "outputSchema");
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
+  Object.assign(record, extraFields(entry));
   return record;
 }
 
@@ -325,6 +334,13 @@ class Interceptor {
   private readonly withheldNames = new Set<string>();
   private listingNames = new Set<string>();
   private priorNames = new Set<string>();
+  // The inner client's own listTools, captured before the refresh hook replaces it.
+  private rawListTools: AnyFn | null = null;
+  // Set by a tools/list_changed notification, cleared by the next cursorless list that
+  // started after it. While set, calls hold under guard and strict: the definitions
+  // observed so far may no longer be what the server lists.
+  private relistRequired = false;
+  private listEpoch = 0;
   private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
   // The tier the LAST gated call for a tool ACTUALLY reached, for its provenance (mirrors the
@@ -403,13 +419,88 @@ class Interceptor {
   }
 
   // ------------------------------------------------------------- list_tools
-  // The SDK client's listChanged handler calls listTools on the inner client,
-  // so that refresh is not filtered here.
+  // The SDK client's listChanged refresh calls `this.listTools()` on the inner
+  // client. `installRefreshHooks` points that property here, so the refresh is
+  // filtered like any other list and `onChanged` only sees kept entries.
   listTools(target: SessionLike, args: unknown[]): unknown {
+    const cursorless = cursorOfList(args) === null;
     const window = this.openListingWindow(cursorOfList(args));
-    const result = (target.listTools as AnyFn).apply(target, args);
-    if (isThenable(result)) return result.then((r) => this.filterList(r, window));
-    return this.filterList(result, window);
+    const epoch = this.listEpoch;
+    const raw = this.rawListTools ?? (target.listTools as AnyFn);
+    const result = raw.apply(target, args);
+    if (isThenable(result)) return result.then((r) => this.filterList(r, window, cursorless, epoch));
+    return this.filterList(result, window, cursorless, epoch);
+  }
+
+  /** Route the inner client's own listTools and its notification handlers
+   * through this interceptor. Without it, the MCP client's listChanged refresh
+   * hands every tool to `onChanged` unfiltered, and a call is judged against a
+   * definition the server no longer lists. */
+  installRefreshHooks(target: SessionLike): void {
+    const current = Reflect.get(target, "listTools", target);
+    if (typeof current !== "function") return;
+    const prior = Reflect.get(target, REFRESH_HOOK, target) as { raw: AnyFn } | undefined;
+    this.rawListTools = prior !== undefined ? prior.raw : (current as AnyFn);
+    try {
+      Object.defineProperty(target, "listTools", {
+        value: (...args: unknown[]): unknown => this.listTools(target, args),
+        configurable: true,
+        writable: true,
+        enumerable: false,
+      });
+      Object.defineProperty(target, REFRESH_HOOK, {
+        value: { raw: this.rawListTools },
+        configurable: true,
+        enumerable: false,
+      });
+      this.hookNotifications(target);
+    } catch (exc) {
+      this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.installRefreshHooks");
+      if (this.gate.posture !== Posture.MONITOR) {
+        throw new Error(
+          "mcpindex: cannot route this client's tool-list refresh through the gate (the client object " +
+            "rejects new properties, for example because it is frozen). Wrap an unfrozen client, or use " +
+            "posture monitor.",
+        );
+      }
+    }
+  }
+
+  private hookNotifications(target: SessionLike): void {
+    const watch = (handler: unknown): unknown => {
+      if (typeof handler !== "function" || Reflect.get(handler, REFRESH_HOOK) === true) return handler;
+      const wrapped = (...args: unknown[]): unknown => {
+        const note = args[0];
+        if (note !== null && typeof note === "object" && (note as { method?: unknown }).method === LIST_CHANGED) {
+          this.markListChanged();
+        }
+        return (handler as AnyFn)(...args);
+      };
+      Object.defineProperty(wrapped, REFRESH_HOOK, { value: true });
+      return wrapped;
+    };
+    // Handlers registered before wrap: the MCP client registers its listChanged
+    // refresh during connect().
+    const handlers = Reflect.get(target, "_notificationHandlers", target);
+    if (handlers instanceof Map && handlers.has(LIST_CHANGED)) {
+      handlers.set(LIST_CHANGED, watch(handlers.get(LIST_CHANGED)));
+    }
+    // Handlers registered after wrap, including the one connect() sets up.
+    const setter = Reflect.get(target, "setNotificationHandler", target);
+    if (typeof setter === "function") {
+      Object.defineProperty(target, "setNotificationHandler", {
+        value: (schema: unknown, handler: unknown, ...rest: unknown[]): unknown =>
+          (setter as AnyFn).call(target, schema, watch(handler), ...rest),
+        configurable: true,
+        writable: true,
+        enumerable: false,
+      });
+    }
+  }
+
+  private markListChanged(): void {
+    this.listEpoch += 1;
+    if (this.gate.posture !== Posture.MONITOR) this.relistRequired = true;
   }
 
   private openListingWindow(cursor: string | null): Set<string> {
@@ -421,7 +512,12 @@ class Interceptor {
     return this.listingNames;
   }
 
-  private filterList(result: unknown, window: Set<string>): unknown {
+  private filterList(
+    result: unknown,
+    window: Set<string>,
+    cursorless = false,
+    epoch: number = this.listEpoch,
+  ): unknown {
     try {
       if (!carriesTools(result)) return result;
       const raw = rawToolEntries(result);
@@ -431,6 +527,8 @@ class Interceptor {
       }
       this.gate.reloadPins();
       this.observe(result);
+      // A cursorless list that began after the last list_changed is the fresh read.
+      if (cursorless && epoch === this.listEpoch) this.relistRequired = false;
       if (this.gate.posture === Posture.MONITOR) return result;
       const outcome = filterListing(this.gate, raw, window);
       this.emitWithheld(outcome.withheld);
@@ -657,10 +755,12 @@ class Interceptor {
     }
     const [method, toolName] = requestMethodAndTool(args[0]);
     if (method === "tools/list") {
+      const cursorless = cursorOfRequest(args[0]) === null;
       const window = this.openListingWindow(cursorOfRequest(args[0]));
+      const epoch = this.listEpoch;
       const result = (reqFn as AnyFn).apply(target, args);
-      if (isThenable(result)) return result.then((r) => this.filterList(r, window));
-      return this.filterList(result, window);
+      if (isThenable(result)) return result.then((r) => this.filterList(r, window, cursorless, epoch));
+      return this.filterList(result, window, cursorless, epoch);
     }
     if (method !== "tools/call") {
       return (reqFn as AnyFn).apply(target, args);
@@ -788,6 +888,18 @@ class Interceptor {
   }
 
   private decideOrInternalHold(name: string, operation: Operation): PreflightVerdict {
+    if (this.relistRequired && this.gate.posture !== Posture.MONITOR) {
+      const verdict = makeVerdict({
+        serverId: this.gate.serverId,
+        toolName: name,
+        decision: Decision.HOLD,
+        reason: RELIST_CALL_REASON,
+        isContractDiff: false,
+        holdClass: HoldClass.UNCHECKABLE,
+      });
+      this.recordCall(name, verdict, verdict);
+      return verdict;
+    }
     if (this.withheldNames.has(name)) {
       const verdict = makeVerdict({
         serverId: this.gate.serverId,
@@ -994,7 +1106,8 @@ const OWN_METHODS = new Set([
  * the gate. Under guard and strict, `listTools` leaves out a tool whose
  * description or input-schema text changed, and a new tool on an already-pinned
  * server until it is reviewed (`approvePending` or the upgrade CLI). The SDK
- * client's listChanged refresh calls the inner client and is not filtered. */
+ * client's listChanged refresh goes through the same filter, and calls hold
+ * after a list_changed until the list is read again. */
 export type Wrapped<T> = T & {
   repin(tool?: string): PinnedTool[];
   approvePending(name: string, definitionHash: string): PinnedTool | null;
@@ -1006,6 +1119,7 @@ export type Wrapped<T> = T & {
 export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrapped<T> {
   const sess = session as unknown as SessionLike;
   const interceptor = new Interceptor(sess, opts);
+  interceptor.installRefreshHooks(sess);
 
   const handler: ProxyHandler<SessionLike> = {
     get(target, prop, _receiver) {

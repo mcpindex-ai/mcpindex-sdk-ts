@@ -25,6 +25,13 @@ import {
   jsonEqual,
 } from "./schemaDiff.js";
 import type { Change } from "./schemaDiff.js";
+import {
+  CONTRACT_FIELDS_VERSION,
+  comparedFields,
+  comparedKeys,
+  fieldLabel,
+  missingExtraFields,
+} from "./contractFields.js";
 import { assess, blastRank } from "./risk.js";
 import { classifyToolDef } from "./actionClass.js";
 import { scanSchemaHasMarker } from "./scan.js";
@@ -103,6 +110,8 @@ const DANGEROUS_REASON_MARKERS: readonly string[] = [
   "could not complete",
   "DESCRIPTION changed",
   "schema text changed",
+  // title, icons, _meta, execution or a later top-level field on a hash-matched tool.
+  "a tool field outside the definition hash changed",
   "behavioral validation FAILED",
   "behavioral validation UNAVAILABLE",
   "behavioral validation DECLINED",
@@ -889,6 +898,7 @@ export class Gate {
         pinnedAt: this.now(),
         schema: defn,
         launchKey: opts?.launchKey,
+        contractFields: CONTRACT_FIELDS_VERSION,
       });
       // M1 drift telemetry — emit the COVERAGE (pin) signal once per first-seen tool.
       // Opt-in, fail-open, off-path: recordPin never throws and never touches the network
@@ -897,6 +907,25 @@ export class Gate {
       // M3 fleet query — fire-and-forget ask the fleet whether THIS tool has corroborated
       // drift (off-path; warms the cache before the first call so evaluate() can warn on call 1).
       driftQuery.prefetch(this._serverId, name);
+      return;
+    }
+    this.backfillFields(name, defn);
+  }
+
+  /** Fill in the fields an old pin never recorded, once, from a list whose hash
+   * matches. annotations and outputSchema keep their own rules, and a field the
+   * pin already holds is compared, never overwritten. Mirrors Python
+   * `_backfill_fields`. A failed write leaves the pin as it was. */
+  private backfillFields(name: string, defn: ToolDef): void {
+    const existing = this.pin.get(this._serverId, name);
+    if (existing === null || existing.contractFields !== undefined || existing.schema === null) return;
+    try {
+      if (hashTool(defn) !== existing.definitionHash) return;
+      const schema = existing.schema as Record<string, unknown>;
+      const merged = { ...schema, ...missingExtraFields(schema, defn as Record<string, unknown>) };
+      this.pin.put({ ...existing, schema: merged as ToolDef, contractFields: CONTRACT_FIELDS_VERSION });
+    } catch {
+      // a backfill must never break the listing
     }
   }
 
@@ -914,6 +943,7 @@ export class Gate {
       schema: observed,
       via: opts?.via,
       launchKey: keptKey,
+      contractFields: CONTRACT_FIELDS_VERSION,
     };
     this.pin.put(p);
     return p;
@@ -1045,6 +1075,43 @@ export class Gate {
     ];
   }
 
+  /** A hash-matched tool whose title, icons, _meta, execution or any other field
+   * outside the hash changed. Mirrors Python `_extra_field_drift`. */
+  private extraFieldDrift(
+    pinned: PinnedTool,
+    pinnedRec: Record<string, unknown>,
+    observedRec: Record<string, unknown>,
+  ): PreflightVerdict | null {
+    const changed: string[] = [];
+    try {
+      const before = comparedFields(pinnedRec);
+      const after = comparedFields(observedRec);
+      for (const key of comparedKeys(pinnedRec, observedRec, pinned.contractFields !== undefined)) {
+        if (!jsonEqual(before[key], after[key])) changed.push(key);
+      }
+    } catch (exc) {
+      if (exc instanceof UndiffableError) {
+        return this.driftHold(
+          pinned.toolName,
+          [],
+          "a tool field outside the definition hash could not be compared; fail-closed HOLD",
+          HoldClass.FINDING,
+        );
+      }
+      throw exc;
+    }
+    if (changed.length === 0) return null;
+    const shown = changed.slice(0, 8).map(fieldLabel).join(", ");
+    const more = changed.length > 8 ? ` and ${changed.length - 8} more` : "";
+    return this.driftHold(
+      pinned.toolName,
+      [],
+      `contract DRIFTED: a tool field outside the definition hash changed (${shown}${more}); ` +
+        "the host still shows it. Review the before/after and re-pin if expected",
+      HoldClass.DRIFT,
+    );
+  }
+
   private mandatedUnhashedDrift(pinned: PinnedTool, observed: ToolDef): PreflightVerdict | null {
     // STEP 1 (fail-closed, H1 / FIX 2) — independent of the structural diff and load-
     // bearing: scan the observed UNHASHED outputSchema for an injection/exfil marker
@@ -1081,6 +1148,8 @@ export class Gate {
     if (pinned.schema === null) return null;
     const pinnedRec = pinned.schema as Record<string, unknown>;
     const observedRec = observed as Record<string, unknown>;
+    const extra = this.extraFieldDrift(pinned, pinnedRec, observedRec);
+    if (extra !== null) return extra;
     try {
       const sameUnhashed =
         jsonEqual(pinnedRec["annotations"], observedRec["annotations"]) &&
