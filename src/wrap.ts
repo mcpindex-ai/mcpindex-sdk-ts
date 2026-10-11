@@ -27,7 +27,8 @@
  * shared Gate reads only the PUBLIC contract.
  */
 
-import { assignOwn, extraFields } from "./contractFields.js";
+import { ContextWatcher, defaultContextStorePath, type ContextObservation } from "./contextWatch.js";
+import { assignOwn, listedFields } from "./contractFields.js";
 import {
   Gate,
   Ownership,
@@ -65,7 +66,7 @@ import { ErrorStore, Operation } from "./errors.js";
 import { Action, LocalStats, OutcomeStore } from "./outcomes.js";
 import { surfaceProvenance } from "./provenance.js";
 import type { Provenance } from "./provenance.js";
-import { AmbientNotifier } from "./ambient.js";
+import { AmbientNotifier, safeLabel } from "./ambient.js";
 import type { AmbientObserver } from "./ambient.js";
 
 const DEFAULT_BEHAVIORAL_MANDATED_KINDS: ReadonlySet<ChangeKind> = new Set([
@@ -123,6 +124,9 @@ export interface WrapOptions {
   /** `"memory"` keeps pins in this process only. `"file"` forces the file store
    * even without a `serverId`. The default is a file when `serverId` is set. */
   pinStore?: "memory" | "file";
+  /** Called when the server's `instructions` are first pinned or change. Observation
+   * only: `getInstructions()` still returns what the server sent. Needs a file pin store. */
+  onContextDrift?: ((obs: ContextObservation) => void) | null;
   /** Called when a tool is left out of a list: server id, tool, reason, live hash. */
   onWithheld?: ((serverId: string, tool: string, reason: string, definitionHash: string) => void) | null;
   /** Logical id the tools are pinned under. Optional: defaults to
@@ -262,7 +266,7 @@ function toolToDict(entry: unknown): ToolDef | null {
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   const outp = attrOrKey(entry, "outputSchema");
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
-  assignOwn(record, extraFields(entry));
+  assignOwn(record, listedFields(entry));
   return record;
 }
 
@@ -344,6 +348,9 @@ class Interceptor {
   // list page that started after the notification carries it; until then its calls hold
   // under guard and strict. Per name, because the MCP client's refresh reads page 1 only.
   private staleNames = new Set<string>();
+  private readonly contextWatcher: ContextWatcher | null;
+  private contextObserved = false;
+  private firstSightWindow = false;
   private listEpoch = 0;
   private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
@@ -383,6 +390,54 @@ class Interceptor {
     // under DO_NOT_TRACK). `onInvocation` lets an integrator render the signal in their
     // own UI. The notifier never touches stdout or the gate decision.
     this.ambient = AmbientNotifier.fromEnv({ observer: opts.onInvocation });
+    this.contextWatcher = this.buildContextWatcher(opts.onContextDrift ?? null);
+  }
+
+  private buildContextWatcher(onDrift: ((obs: ContextObservation) => void) | null): ContextWatcher | null {
+    const path = this.gate.pinStore.path;
+    if (path === null) return null;
+    const watcherPath = defaultContextStorePath(path);
+    return new ContextWatcher(
+      watcherPath,
+      this.gate.serverId,
+      (obs) => {
+        const kinds = obs.kinds.length > 0 ? obs.kinds.join(", ") : obs.detail || "-";
+        process.stderr.write(
+          `mcpindex: context surface ${obs.outcome} on ${safeLabel(obs.serverId)} (${safeLabel(kinds)}); baseline ${watcherPath}\n`,
+        );
+        if (onDrift !== null) onDrift(obs);
+      },
+      utcNowIso,
+    );
+  }
+
+  /** Read `getInstructions()` once per connection and observe it. Never throws,
+   * never changes what the session returns. */
+  observeContext(target: SessionLike): void {
+    if (this.contextWatcher === null || this.contextObserved) return;
+    try {
+      const getter = Reflect.get(target, "getInstructions", target);
+      const version = Reflect.get(target, "getServerVersion", target);
+      if (typeof getter !== "function" || typeof version !== "function") return;
+      if ((version as AnyFn).call(target) === undefined) return; // not connected yet
+      this.contextObserved = true;
+      this.contextWatcher.observe((getter as AnyFn).call(target), "initialize", null);
+    } catch {
+      // observing must never break the session
+    }
+  }
+
+  connectAndObserve(target: SessionLike, connect: AnyFn, args: unknown[]): unknown {
+    this.contextObserved = false;
+    const result = connect.apply(target, args);
+    if (isThenable(result)) {
+      return result.then((value) => {
+        this.observeContext(target);
+        return value;
+      });
+    }
+    this.observeContext(target);
+    return result;
   }
 
   /** Emit the ambient "watching this tool" signal on the PROCEED path. Fully isolated and
@@ -522,6 +577,8 @@ class Interceptor {
       this.listingNames = new Set();
       this.gate.reloadPins();
       this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
+      // Every page of a list that opened on an empty, untainted store is first sight.
+      this.firstSightWindow = this.priorNames.size === 0 && this.gate.pinStore.tainted === null;
     }
     return this.listingNames;
   }
@@ -604,6 +661,7 @@ class Interceptor {
       // An empty prior snapshot is not enough on a cursor-bearing first list.
       const allowNew =
         storeEmpty ||
+        this.firstSightWindow ||
         this.gate.posture === Posture.MONITOR ||
         this.gate.newTools === "tofu";
       let prior = this.priorNames;
@@ -1130,6 +1188,8 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
   const sess = session as unknown as SessionLike;
   const interceptor = new Interceptor(sess, opts);
   interceptor.installRefreshHooks(sess);
+  // Wrapped after connect: the instructions are already in hand.
+  interceptor.observeContext(sess);
 
   const handler: ProxyHandler<SessionLike> = {
     get(target, prop, _receiver) {
@@ -1166,6 +1226,11 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
         const real = Reflect.get(target, "experimental", target);
         if (real === null || typeof real !== "object") return real;
         return interceptor.wrapExperimental(real as ExperimentalLike);
+      }
+      if (prop === "connect") {
+        const realConnect = Reflect.get(target, "connect", target);
+        if (typeof realConnect !== "function") return realConnect;
+        return (...args: unknown[]): unknown => interceptor.connectAndObserve(target, realConnect as AnyFn, args);
       }
       if (prop === "close") {
         // The SDK `Protocol.close()` is the wrapper's natural session-dispose hook (the

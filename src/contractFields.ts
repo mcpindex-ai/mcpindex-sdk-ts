@@ -55,11 +55,22 @@ const ANNOTATION_HINTS = new Set(["readOnlyHint", "destructiveHint", "idempotent
 // so no server key can collide with it.
 export const ANNOTATION_TEXT_KEY = "annotations";
 
+/** What a normalized definition and a pin keep: `extraFields` plus a title that
+ * is present but not a string. The digest stays on `extraFields`. Mirrors Python
+ * `listed_fields`. */
+export function listedFields(entry: unknown): Record<string, unknown> {
+  const out = extraFields(entry);
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return out;
+  const title = (entry as Record<string, unknown>)["title"];
+  if (title !== undefined && title !== null && typeof title !== "string") setOwn(out, "title", title);
+  return out;
+}
+
 /** What the gate compares on a hash match: the extra fields, plus the
  * annotation keys other than the four hints under one synthetic key that never
  * reaches a pin or a digest. Mirrors Python `compared_fields`. */
 export function comparedFields(entry: unknown): Record<string, unknown> {
-  const out = extraFields(entry);
+  const out = listedFields(entry);
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return out;
   const ann = (entry as Record<string, unknown>)["annotations"];
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) {
@@ -94,9 +105,9 @@ export function missingExtraFields(
   pinnedSchema: Record<string, unknown>,
   observed: Record<string, unknown>,
 ): Record<string, unknown> {
-  const have = new Set(Object.keys(extraFields(pinnedSchema)));
+  const have = new Set(Object.keys(listedFields(pinnedSchema)));
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(extraFields(observed))) {
+  for (const [key, value] of Object.entries(listedFields(observed))) {
     if (!have.has(key)) setOwn(out, key, value);
   }
   return out;

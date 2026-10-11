@@ -51,6 +51,9 @@ export interface PendingRecord {
   readonly pendingClass: string;
   readonly firstSeen: string;
   readonly launchKey?: string;
+  /** CONTRACT_FIELDS_VERSION when `definition` holds every listed field. Records
+   * from 0.16 lack it; approving one leaves the pin unmarked. */
+  readonly contractFields?: number;
 }
 
 export function pendingPath(stateDirectory: string): string {
@@ -101,6 +104,7 @@ function parseRecord(row: unknown): PendingRecord | null {
     return null;
   }
   const key = body["launch_key"];
+  const fieldsV = body["contract_fields"];
   return {
     serverId: server,
     toolName: tool,
@@ -109,6 +113,7 @@ function parseRecord(row: unknown): PendingRecord | null {
     pendingClass: klass,
     firstSeen: seen,
     launchKey: typeof key === "string" && key.length > 0 ? key : undefined,
+    contractFields: Number.isInteger(fieldsV) ? (fieldsV as number) : undefined,
   };
 }
 
@@ -158,6 +163,7 @@ function dumpUnlocked(path: string, records: PendingRecord[]): void {
         first_seen: rec.firstSeen,
       };
       if (rec.launchKey) row["launch_key"] = rec.launchKey;
+      if (rec.contractFields !== undefined) row["contract_fields"] = rec.contractFields;
       return row;
     }),
   };
@@ -244,6 +250,7 @@ export function recordPending(
       pendingClass: args.pendingClass,
       firstSeen,
       launchKey: args.launchKey,
+      contractFields: CONTRACT_FIELDS_VERSION,
     });
     dumpUnlocked(path, cap(kept));
   });
@@ -280,7 +287,7 @@ function pinRecord(pin: PreflightPin, rec: PendingRecord): PinnedTool | null {
     schema: rec.definition,
     via: "approve",
     launchKey: rec.launchKey,
-    contractFields: CONTRACT_FIELDS_VERSION,
+    contractFields: rec.contractFields,
   };
   pin.put(written);
   return written;

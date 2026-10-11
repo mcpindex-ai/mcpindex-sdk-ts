@@ -5,6 +5,17 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.18.0 - 2026-10-11
+
+### Changed
+
+- The wrapper reads the server's `instructions` after connect, pins them beside the tool pins (`.<server>.context.json`, the same format the gate's proxy writes), and reports a first pin or a change through the new `onContextDrift` option and one stderr line. It never changes what `getInstructions()` returns. It needs a file pin store. A numbers-only change is reported; this SDK does not apply the gate's digit budget.
+- Under guard and strict a pinned tool that gains outputSchema text (descriptions, titles, defaults, examples) for the first time is left out and its call holds. A first outputSchema with no text is still shown.
+- The first paginated list on an empty pin store pins every page. Before, page 2 was held as new tools on an already-pinned server.
+- A title that is not a string is compared on a pinned tool.
+- Pending records carry the field-set version. Approving one written by 0.16 leaves the pin to record its fields on the next list, so the tool is not held again right after approval.
+- A tool whose `annotations` key is present with the value `undefined` (an in-process McpServer tool registered without annotations) is shown. Before, it was left out as a wrong type.
+
 ## 0.17.0 - 2026-10-11
 
 ### Changed

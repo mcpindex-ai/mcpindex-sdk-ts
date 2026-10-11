@@ -112,6 +112,7 @@ const DANGEROUS_REASON_MARKERS: readonly string[] = [
   "schema text changed",
   // title, icons, _meta, execution or a later top-level field on a hash-matched tool.
   "a tool field outside the definition hash changed",
+  "outputSchema text was added",
   "behavioral validation FAILED",
   "behavioral validation UNAVAILABLE",
   "behavioral validation DECLINED",
@@ -1178,8 +1179,19 @@ export class Gate {
       );
     }
     const mandated = drift.filter((c) => this.behavioralMandatedKinds.has(c.kind)).map((c) => c.kind.toString());
-    if (mandated.length === 0) return null;
-    return this.behavioralInconclusive(pinned.toolName, drift, mandated);
+    if (mandated.length > 0) return this.behavioralInconclusive(pinned.toolName, drift, mandated);
+    // A first outputSchema is additive, but strings in it reach the host the way a
+    // description does. Mirrors the Python `_unhashed_drift` additive branch.
+    const added = drift.filter((c) => c.kind === ChangeKind.OUTPUT_SCHEMA_ADDED);
+    if (added.length > 0 && paramCarriesText(observedRec["outputSchema"])) {
+      return this.driftHold(
+        pinned.toolName,
+        added,
+        "contract DRIFTED: outputSchema text was added to a pinned tool (strings the host passes on and the hash does not cover); review and re-pin if expected",
+        HoldClass.DRIFT,
+      );
+    }
+    return null;
   }
 
   private validateDrift(

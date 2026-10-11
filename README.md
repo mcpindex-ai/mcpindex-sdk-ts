@@ -75,8 +75,12 @@ The pin records every top-level field a server lists for a tool (`title`,
 `icons`, `_meta`, `execution`, and any later field) and annotation keys other
 than the four hints. A change to one of them on a pinned tool leaves the tool
 out under guard and strict. A pin written before 0.17.0 records those fields
-once, from the first matching list. First-time `outputSchema` text on an
-otherwise unchanged tool is still shown.
+once, from the first matching list. A first `outputSchema` that carries text
+is held the same way; one with no text is shown.
+
+With a file pin store, the wrapper also reads the server's `instructions` after
+connect, pins them, and reports a first pin or a change through
+`onContextDrift`. `getInstructions()` still returns what the server sent.
 
 ## Sign in (optional) - `mcpindex login`
 
