@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -182,6 +182,58 @@ test("wrap with persistent store withholds a new tool and approvePending admits 
   } finally {
     if (prev === undefined) delete process.env.MCPINDEX_STATE_DIR;
     else process.env.MCPINDEX_STATE_DIR = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stale .lck is broken and an empty leftover .lock does not block", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-pin-"));
+  try {
+    const path = join(dir, "srv.json");
+    const lock = `${path}.lck`;
+    writeFileSync(lock, "1\n2000-01-01T00:00:00.000Z\n");
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    const pin = new PreflightPin(path);
+    pin.put({
+      serverId: "srv",
+      toolName: "echo",
+      definitionHash: "ab".repeat(32),
+      pinnedAt: "2026-10-09T00:00:00+00:00",
+      schema: null,
+    });
+    assert.ok(pin.get("srv", "echo"));
+    writeFileSync(`${path}.lock`, "");
+    pin.put({
+      serverId: "srv",
+      toolName: "note",
+      definitionHash: "cd".repeat(32),
+      pinnedAt: "2026-10-09T00:00:00+00:00",
+      schema: null,
+    });
+    assert.ok(pin.get("srv", "note"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("file-store put succeeds when process.platform is win32", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-pin-"));
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  try {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const path = join(dir, "srv.json");
+    const pin = new PreflightPin(path);
+    pin.put({
+      serverId: "srv",
+      toolName: "echo",
+      definitionHash: "ab".repeat(32),
+      pinnedAt: "2026-10-09T00:00:00+00:00",
+      schema: null,
+    });
+    assert.ok(pin.get("srv", "echo"));
+  } finally {
+    if (original) Object.defineProperty(process, "platform", original);
     rmSync(dir, { recursive: true, force: true });
   }
 });

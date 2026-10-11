@@ -505,7 +505,13 @@ class Interceptor {
         const name = defn["name"] as string;
         this.observed.set(name, defn);
         if (!prior.has(name) && !allowNew) continue;
-        this.gate.observe(name, defn);
+        try {
+          this.gate.observe(name, defn);
+        } catch {
+          // Lock timeout or pin write failure: leave the tool unpinned so a
+          // later call holds. Do not break the listing.
+          continue;
+        }
       }
     } catch (exc) {
       this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.observe");
