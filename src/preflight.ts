@@ -597,4 +597,4 @@ export function defaultPinStorePath(serverId: string): string {
   return join(root, "pins", `${sanitizeServerId(serverId)}.json`);
 }
 
-export { hashTool };
+export { hashTool, approvalDigest } from "./canonical.js";

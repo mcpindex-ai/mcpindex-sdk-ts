@@ -11,7 +11,7 @@
  * here: the SDK calls listTools on the inner client.
  */
 
-import { hashTool } from "./canonical.js";
+import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
 import { Decision, type ToolDef } from "./preflight.js";
 
@@ -155,7 +155,7 @@ function notice(gate: Gate, name: string, reason: string, entry: unknown): Withh
 function hashOrBlank(contract: ToolDef | null): string {
   if (contract === null) return "";
   try {
-    return hashTool(contract);
+    return approvalDigest(contract);
   } catch {
     return "";
   }
@@ -187,6 +187,7 @@ function publicContract(entry: unknown): ToolDef | null {
   const schema = obj["inputSchema"];
   const ann = obj["annotations"];
   const outp = obj["outputSchema"];
+  const title = obj["title"];
   const record: ToolDef = {
     name,
     description: obj["description"] == null ? "" : String(obj["description"]),
@@ -194,5 +195,6 @@ function publicContract(entry: unknown): ToolDef | null {
   };
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
+  if (typeof title === "string" && title.length > 0) record["title"] = title;
   return record;
 }

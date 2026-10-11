@@ -275,3 +275,61 @@ export function hashTool(defn: Record<string, unknown>): string {
       : {};
   return toolHash(name, desc, inSch);
 }
+
+/**
+ * Digest over the whole public contract a person reviews (port of Python
+ * ``approval_digest``). Covers name, description, inputSchema, outputSchema,
+ * annotations, and title. Pending approve tokens use this; pin drift still
+ * uses ``hashTool``.
+ */
+export function approvalDigest(defn: Record<string, unknown>): string {
+  const payload: Record<string, unknown> = {
+    name: defn.name === undefined || defn.name === null ? "" : String(defn.name),
+    description:
+      defn.description === undefined || defn.description === null
+        ? ""
+        : String(defn.description),
+    inputSchema:
+      defn.inputSchema !== null &&
+      typeof defn.inputSchema === "object" &&
+      !Array.isArray(defn.inputSchema)
+        ? defn.inputSchema
+        : {},
+  };
+  const outp = defn.outputSchema;
+  if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) {
+    payload.outputSchema = outp;
+  }
+  const ann = defn.annotations;
+  if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) {
+    payload.annotations = ann;
+  }
+  const title = defn.title;
+  if (typeof title === "string" && title.length > 0) {
+    payload.title = title;
+  }
+  // Python: json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+  const stable = dumpsSorted(payload);
+  return createHash("sha256").update(Buffer.from(stable, "utf8")).digest("hex");
+}
+
+function dumpsSorted(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("non-finite number");
+    return Number.isInteger(value) ? String(value) : JSON.stringify(value);
+  }
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(dumpsSorted).join(",") + "]";
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    const parts = keys.map(
+      (key) => JSON.stringify(key) + ":" + dumpsSorted((value as Record<string, unknown>)[key]),
+    );
+    return "{" + parts.join(",") + "}";
+  }
+  throw new Error("unsupported JSON value");
+}

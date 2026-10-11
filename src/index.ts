@@ -38,6 +38,7 @@ export {
   renderVerdict,
   safetyRelevantDrift,
   hashTool,
+  approvalDigest,
 } from "./preflight.js";
 export type { PinnedTool, PreflightVerdict, ToolDef, ActionClassification } from "./preflight.js";
 

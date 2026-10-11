@@ -5,10 +5,10 @@
  * `wrap(session)` returns a transparent JS `Proxy` over the real
  * `@modelcontextprotocol/sdk` `Client`: every method/prop passes through the
  * get-trap UNTOUCHED, EXCEPT the three gated seams:
- *   - `listTools`  — pin first-seen tools; under guard/strict a new tool on an
+ *   - `listTools`  - pin first-seen tools; under guard/strict a new tool on an
  *     already-pinned server is left out until reviewed.
- *   - `callTool`   — run the shared Gate before delegating; HOLD on drift.
- *   - `request`    — the low-level RPC chokepoint (the TS analog of Python's
+ *   - `callTool`   - run the shared Gate before delegating; HOLD on drift.
+ *   - `request`    - the low-level RPC chokepoint (the TS analog of Python's
  *     `send_request`). `callTool` is sugar over `request({method:'tools/call'})`,
  *     so a caller can invoke any tool straight through `request`; we gate a
  *     `tools/call` there too, or the pre-flight check is a paper wall.

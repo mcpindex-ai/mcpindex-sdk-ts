@@ -1,16 +1,30 @@
 /**
  * Tools held for review, on disk under the gate state directory.
  *
- * Same file shape and flock as Python ``tooling.cse.pending_store`` so the
- * Python CLI and this SDK share one pending list.
+ * Same file shape and lock as Python ``tooling.cse.pending_store`` so the
+ * Python CLI and this SDK share one pending list. Approval tokens are the
+ * full-contract ``approvalDigest``; a later list with a different digest is
+ * kept alongside the first rather than overwriting it.
  */
 
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { withExclusiveLock } from "./fileLock.js";
-import { hashTool } from "./canonical.js";
+import { approvalDigest, hashTool } from "./canonical.js";
 import { PreflightPin, utcNowIso, type PinnedTool, type ToolDef } from "./preflight.js";
 
 export const CLASS_CHANGED = "changed-without-upgrade";
@@ -141,8 +155,13 @@ function dumpUnlocked(path: string, records: PendingRecord[]): void {
   };
   const directory = dirname(path) || ".";
   mkdirSync(directory, { recursive: true });
-  const tmp = join(directory, `.pending.${process.pid}.tmp`);
-  const fd = openSync(tmp, "w", 0o600);
+  const suffix = randomBytes(8).toString("hex");
+  const tmp = join(directory, `.pending.${process.pid}.${suffix}.tmp`);
+  let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+  if (typeof constants.O_NOFOLLOW === "number") {
+    flags |= constants.O_NOFOLLOW;
+  }
+  const fd = openSync(tmp, flags, 0o600);
   try {
     writeSync(fd, Buffer.from(stableStringify(payload), "utf8"));
     fsyncSync(fd);
@@ -199,8 +218,12 @@ export function recordPending(
     const kept: PendingRecord[] = [];
     let firstSeen = utcNowIso();
     for (const rec of rows) {
-      if (rec.serverId === args.serverId && rec.toolName === args.toolName) {
-        if (rec.definitionHash === args.definitionHash) firstSeen = rec.firstSeen;
+      if (
+        rec.serverId === args.serverId &&
+        rec.toolName === args.toolName &&
+        rec.definitionHash === args.definitionHash
+      ) {
+        firstSeen = rec.firstSeen;
         continue;
       }
       kept.push(rec);
@@ -229,14 +252,22 @@ export function loadPending(path: string): PendingRecord[] {
 
 function pinRecord(pin: PreflightPin, rec: PendingRecord): PinnedTool | null {
   try {
-    if (hashTool(rec.definition) !== rec.definitionHash) return null;
+    if (approvalDigest(rec.definition as Record<string, unknown>) !== rec.definitionHash) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  let pinHash: string;
+  try {
+    pinHash = hashTool(rec.definition as Record<string, unknown>);
   } catch {
     return null;
   }
   const written: PinnedTool = {
     serverId: rec.serverId,
     toolName: rec.toolName,
-    definitionHash: rec.definitionHash,
+    definitionHash: pinHash,
     pinnedAt: utcNowIso(),
     schema: rec.definition,
     via: "approve",
@@ -252,19 +283,32 @@ export function approveOne(
   serverId: string,
   toolName: string,
   definitionHash: string,
+  opts?: { floatingOnly?: boolean },
 ): PinnedTool | null {
   const match = withExclusiveLock(path, () => {
     for (const rec of loadUnlocked(path)) {
-      if (rec.serverId === serverId && rec.toolName === toolName) return rec;
+      if (
+        rec.serverId === serverId &&
+        rec.toolName === toolName &&
+        rec.definitionHash === definitionHash
+      ) {
+        if (opts?.floatingOnly && rec.pendingClass !== CLASS_FLOATING) return null;
+        return rec;
+      }
     }
     return null;
   });
-  if (match === null || match.definitionHash !== definitionHash) return null;
+  if (match === null) return null;
   const written = pinRecord(pin, match);
   if (written === null) return null;
   withExclusiveLock(path, () => {
     const remain = loadUnlocked(path).filter(
-      (rec) => !(rec.serverId === serverId && rec.toolName === toolName),
+      (rec) =>
+        !(
+          rec.serverId === serverId &&
+          rec.toolName === toolName &&
+          rec.definitionHash === definitionHash
+        ),
     );
     dumpUnlocked(path, remain);
   });
