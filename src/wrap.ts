@@ -700,7 +700,14 @@ class Interceptor {
           // later call holds. Do not break the listing.
           continue;
         }
-        if ((firstSight || storeEmpty) && window !== null && window === this.firstSightNames) window.add(name);
+        if (firstSight || storeEmpty) {
+          const current = this.firstSightNames;
+          // Two lists in flight on a first run: a stale response's names belong to the
+          // current window too, when that window opened in the same epoch.
+          if (current !== null && (current === window || (storeEmpty && this.firstSightEpoch === epoch))) {
+            current.add(name);
+          }
+        }
       }
       // The last page ends the window.
       const next =

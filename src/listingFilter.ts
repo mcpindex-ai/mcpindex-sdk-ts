@@ -142,7 +142,8 @@ function notice(gate: Gate, name: string, reason: string, entry: unknown): Withh
   const reviewable =
     reason !== "listing check failed" &&
     reason !== "duplicate name in this tool list" &&
-    !reason.endsWith("is not an object");
+    !reason.endsWith("is not an object") &&
+    !reason.endsWith("is not a string");
   return {
     serverId: gate.serverId,
     toolName: name,
@@ -181,6 +182,9 @@ function wrongObjectField(entry: unknown): string | null {
       return `${key} is not an object`;
     }
   }
+  // The spec makes title a string; a host may still render an object or list as text.
+  const title = obj["title"];
+  if (title !== undefined && title !== null && typeof title !== "string") return "title is not a string";
   return null;
 }
 

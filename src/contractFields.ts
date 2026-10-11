@@ -13,8 +13,7 @@
  * matching list instead of read as a change.
  */
 
-// 3 since a non-string title is recorded and compared. A pin below the current
-// version records the fields it may lack once, from the first matching list.
+// 3 since a non-string title is compared. Any marker from 2 up is complete.
 export const CONTRACT_FIELDS_VERSION = 3;
 
 /** Where a pin file keeps the marker: inside `schema`, which gate 0.18 and SDK
@@ -109,7 +108,7 @@ export function missingExtraFields(
 ): Record<string, unknown> {
   const have = new Set(Object.keys(listedFields(pinnedSchema)));
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(listedFields(observed))) {
+  for (const [key, value] of Object.entries(extraFields(observed))) {
     if (!have.has(key)) setOwn(out, key, value);
   }
   return out;
@@ -120,24 +119,20 @@ const FIRST_COMPLETE_VERSION = 2;
 
 /** Whether a pin's marker means it recorded every field listed at the time. */
 export function isComplete(version: number | undefined): boolean {
-  return version !== undefined && version >= FIRST_COMPLETE_VERSION && version <= CONTRACT_FIELDS_VERSION;
+  // No upper bound: a newer writer records a superset.
+  return version !== undefined && Number.isInteger(version) && version >= FIRST_COMPLETE_VERSION;
 }
 
 /** What a pin at `version` may record once from a matching list (Python
- * `fields_to_backfill`): everything it lacks when unmarked, only a non-string
- * title when it is a v2 pin. */
+ * `fields_to_backfill`): everything it lacks when unmarked, nothing when marked. */
 export function fieldsToBackfill(
   pinnedSchema: Record<string, unknown>,
   observed: Record<string, unknown>,
   version: number | undefined,
 ): Record<string, unknown> {
+  // A marked pin records nothing; a non-string title is never recorded.
   if (!isComplete(version)) return missingExtraFields(pinnedSchema, observed);
-  const out: Record<string, unknown> = {};
-  if (version === 2 && !("title" in pinnedSchema)) {
-    const title = observed["title"];
-    if (title !== undefined && title !== null && typeof title !== "string") setOwn(out, "title", title);
-  }
-  return out;
+  return {};
 }
 
 /** A server-chosen key, quoted and escaped for a reason string (Python
