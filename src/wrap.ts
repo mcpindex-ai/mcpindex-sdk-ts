@@ -350,7 +350,11 @@ class Interceptor {
   private staleNames = new Set<string>();
   private readonly contextWatcher: ContextWatcher | null;
   private contextObserved = false;
-  private firstSightWindow = false;
+  // Names pinned by the current list window when it opened on an empty, untainted
+  // store; null when no window may pin on first sight. Ended by list_changed, any
+  // call, the page that ends the list, and the next cursorless list.
+  private firstSightNames: Set<string> | null = null;
+  private firstSightEpoch = -1;
   private listEpoch = 0;
   private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
@@ -568,6 +572,7 @@ class Interceptor {
 
   private markListChanged(): void {
     this.listEpoch += 1;
+    this.firstSightNames = null;
     if (this.gate.posture === Posture.MONITOR) return;
     for (const name of this.observed.keys()) this.staleNames.add(name);
   }
@@ -577,8 +582,10 @@ class Interceptor {
       this.listingNames = new Set();
       this.gate.reloadPins();
       this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
-      // Every page of a list that opened on an empty, untainted store is first sight.
-      this.firstSightWindow = this.priorNames.size === 0 && this.gate.pinStore.tainted === null;
+      // A list that opens on an empty, untainted store may pin its later pages too.
+      this.firstSightNames =
+        this.priorNames.size === 0 && this.gate.pinStore.tainted === null ? new Set() : null;
+      this.firstSightEpoch = this.listEpoch;
     }
     return this.listingNames;
   }
@@ -592,7 +599,7 @@ class Interceptor {
         return replaceToolList(result, []);
       }
       this.gate.reloadPins();
-      this.observe(result);
+      this.observe(result, epoch);
       // A page that began after the last list_changed is a fresh read of the names it carries.
       if (epoch === this.listEpoch && this.staleNames.size > 0) {
         for (const defn of toolsFromResult(result)) this.staleNames.delete(defn["name"] as string);
@@ -651,7 +658,7 @@ class Interceptor {
     }
   }
 
-  private observe(result: unknown): void {
+  private observe(result: unknown, epoch: number = this.listEpoch): void {
     try {
       const tools = toolsFromResult(result);
       this.gate.reloadPins();
@@ -659,9 +666,16 @@ class Interceptor {
       const storeEmpty = storePins.length === 0;
       // First-sight trust only when the pin store holds no pins for this server.
       // An empty prior snapshot is not enough on a cursor-bearing first list.
+      const window = this.firstSightNames;
+      // Still the current window, and every pin the server holds was written by it.
+      const firstSight =
+        window !== null &&
+        epoch === this.firstSightEpoch &&
+        epoch === this.listEpoch &&
+        storePins.every((pin) => window.has(pin.toolName));
       const allowNew =
         storeEmpty ||
-        this.firstSightWindow ||
+        firstSight ||
         this.gate.posture === Posture.MONITOR ||
         this.gate.newTools === "tofu";
       let prior = this.priorNames;
@@ -679,7 +693,12 @@ class Interceptor {
           // later call holds. Do not break the listing.
           continue;
         }
+        if ((firstSight || storeEmpty) && window !== null && window === this.firstSightNames) window.add(name);
       }
+      // The last page ends the window.
+      const next =
+        result !== null && typeof result === "object" ? (result as Record<string, unknown>)["nextCursor"] : undefined;
+      if (!next) this.firstSightNames = null;
     } catch (exc) {
       this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.observe");
     }
@@ -956,6 +975,8 @@ class Interceptor {
   }
 
   private decideOrInternalHold(name: string, operation: Operation): PreflightVerdict {
+    // A call ends any first-sight window: from here on the server is in use.
+    this.firstSightNames = null;
     if (this.staleNames.has(name) && this.gate.posture !== Posture.MONITOR) {
       const verdict = makeVerdict({
         serverId: this.gate.serverId,

@@ -75,8 +75,9 @@ The pin records every top-level field a server lists for a tool (`title`,
 `icons`, `_meta`, `execution`, and any later field) and annotation keys other
 than the four hints. A change to one of them on a pinned tool leaves the tool
 out under guard and strict. A pin written before 0.17.0 records those fields
-once, from the first matching list. A first `outputSchema` that carries text
-is held the same way; one with no text is shown.
+once, from the first matching list. A first `outputSchema` is held the same way when it
+carries any string or property name, which covers most structured output: expect
+one review per tool when a server starts returning it.
 
 With a file pin store, the wrapper also reads the server's `instructions` after
 connect, pins them, and reports a first pin or a change through

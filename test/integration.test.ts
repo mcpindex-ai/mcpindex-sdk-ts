@@ -160,15 +160,16 @@ test("e2e: output-schema CHANGE on a hash-matched contract -> INCONCLUSIVE, real
   const w = wrap(client, { pin: new PreflightPin(), serverId: "srv" });
 
   await w.listTools();
-  // First add an outputSchema (additive). It is UNHASHED, so the invocation hash
-  // still matches the pin and the call PROCEEDs — but the additive PROCEED does
-  // NOT capture the outputSchema into the pin (only a hash-CHANGING auto-accept
-  // re-pins). So we explicitly repin to make the added outputSchema the baseline.
+  // First add an outputSchema. It is UNHASHED, so the invocation hash still matches
+  // the pin, but a property name is text the host passes on, so under guard the
+  // first add holds until it is reviewed. The dev's repin accepts it as the baseline.
   setContract({ ...UNCHANGED, outputSchema: { type: "object", properties: { a: { type: "string" } } } } as ToolContract);
   await w.listTools();
-  await w.callTool({ name: "search_docs", arguments: { query: "hi" } }); // additive -> proceeds
-  assert.equal(invocations(), 1);
+  await assert.rejects(() => w.callTool({ name: "search_docs", arguments: { query: "hi" } }));
+  assert.equal(invocations(), 0, "a first outputSchema with names holds");
   w.repin("search_docs"); // accept the added outputSchema as the new pin baseline
+  await w.callTool({ name: "search_docs", arguments: { query: "hi" } });
+  assert.equal(invocations(), 1);
 
   // Now CHANGE the outputSchema (the invocation hash still matches) -> INCONCLUSIVE.
   setContract({ ...UNCHANGED, outputSchema: { type: "object", properties: { b: { type: "number" } } } } as ToolContract);

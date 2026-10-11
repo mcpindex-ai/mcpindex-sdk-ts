@@ -287,7 +287,8 @@ function pinRecord(pin: PreflightPin, rec: PendingRecord): PinnedTool | null {
     schema: rec.definition,
     via: "approve",
     launchKey: rec.launchKey,
-    contractFields: rec.contractFields,
+    // Only a record stamped by this version marks the pin complete.
+    contractFields: rec.contractFields === CONTRACT_FIELDS_VERSION ? CONTRACT_FIELDS_VERSION : undefined,
   };
   pin.put(written);
   return written;

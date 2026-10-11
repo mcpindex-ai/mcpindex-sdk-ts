@@ -84,6 +84,21 @@ export function defaultContextStorePath(pinStorePath: string): string {
   return join(dirname(pinStorePath) || ".", `.${stem}.context.json`);
 }
 
+/** Code points in `s` without building an array: a spread of a very long string can
+ * exhaust the heap, which no try/catch survives. */
+function codePointLength(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    n++;
+  }
+  return n;
+}
+
 /** The instructions leg as Python `_instructions_from` shapes it: the hash is over
  * the full UTF-8 text, the length counts code points, and text over the cap is
  * dropped, never truncated. */
@@ -91,7 +106,7 @@ export function legFromInstructions(raw: unknown): Leg {
   if (typeof raw !== "string" || raw.length === 0) {
     return { status: "ok", text: null, text_dropped: false, hash: null, len: null };
   }
-  const len = [...raw].length;
+  const len = codePointLength(raw);
   const hash = "sha256:" + createHash("sha256").update(Buffer.from(raw, "utf8")).digest("hex");
   const text = len <= MAX_INSTRUCTIONS_CHARS ? raw : null;
   return { status: "ok", text, text_dropped: text === null, hash, len };
@@ -190,7 +205,9 @@ class ContextStore {
     if (servers !== null && typeof servers === "object" && !Array.isArray(servers)) {
       for (const [key, value] of Object.entries(servers as Record<string, unknown>)) {
         const pin = parsePin(value);
-        if (pin === null) {
+        // A record filed under another server's key could overwrite that server's
+        // baseline on the next write. Python taints the same case.
+        if (pin === null || pin.server_id !== key) {
           this.tainted = "context store holds an unreadable record";
           continue;
         }

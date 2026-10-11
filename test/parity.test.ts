@@ -211,7 +211,7 @@ test("gate: a description change is NEVER auto-accepted (poisoning channel)", ()
   assert.notEqual(v.descBefore, v.descAfter);
 });
 
-test("gate: output-schema FIRST-TIME add is additive (auto-accept), CHANGE is INCONCLUSIVE", () => {
+test("gate: a bare first outputSchema is additive, one with names holds, a CHANGE is INCONCLUSIVE", () => {
   // outputSchema is UNHASHED, so adding it never changes the invocation hash and
   // never flows through the auto-accept-and-repin path. The pin's baseline schema
   // therefore stays whatever was TOFU-pinned — an evaluate() alone does NOT capture
@@ -222,9 +222,12 @@ test("gate: output-schema FIRST-TIME add is additive (auto-accept), CHANGE is IN
   const pin = new PreflightPin();
   const gate = new Gate({ pin, serverId: "srv" });
   gate.observe("search_docs", CONTRACT);
+  const bare: ToolDef = { ...CONTRACT, outputSchema: { type: "object" } };
+  assert.equal(gate.evaluate("search_docs", bare).decision, Decision.PROCEED, "a first outputSchema with no names or strings is additive");
+  // A first outputSchema with a property name carries text the host passes on: it holds.
   const added: ToolDef = { ...CONTRACT, outputSchema: { type: "object", properties: { a: { type: "string" } } } };
   const v1 = gate.evaluate("search_docs", added);
-  assert.equal(v1.decision, Decision.PROCEED, "first-time outputSchema add is additive");
+  assert.equal(v1.decision, Decision.HOLD, "a first outputSchema with names holds");
 
   // Accept the added outputSchema as the new baseline (the dev's explicit repin),
   // so the next eval compares against a pin that HAS an outputSchema.

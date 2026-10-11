@@ -13,7 +13,9 @@
  * matching list instead of read as a change.
  */
 
-export const CONTRACT_FIELDS_VERSION = 2;
+// 3 since a non-string title is recorded and compared. A pin below the current
+// version records the fields it may lack once, from the first matching list.
+export const CONTRACT_FIELDS_VERSION = 3;
 
 /** Where a pin file keeps the marker: inside `schema`, which gate 0.18 and SDK
  * 0.16 keep whole when they rewrite a record. The store moves it out on load and

@@ -738,6 +738,35 @@ export interface GateEffect {
   drift?: readonly Change[];
 }
 
+const NAMED_SCHEMA_MAPS = new Set(["properties", "patternProperties", "$defs", "definitions"]);
+
+/** A schema carries text the host may pass on: a non-type-name string, or any name
+ * under properties / patternProperties / $defs / definitions. Mirrors Python
+ * `_schema_carries_text`. */
+function schemaCarriesText(node: unknown): boolean {
+  return paramCarriesText(node) || hasNamedMap(node);
+}
+
+function hasNamedMap(node: unknown, depth = 0): boolean {
+  if (depth > 64) return true;
+  if (Array.isArray(node)) return node.some((item) => hasNamedMap(item, depth + 1));
+  if (node !== null && typeof node === "object") {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (
+        NAMED_SCHEMA_MAPS.has(key) &&
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.keys(value).length > 0
+      ) {
+        return true;
+      }
+      if (hasNamedMap(value, depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
 function paramCarriesText(node: unknown, key?: string): boolean {
   if (typeof node === "string") {
     return !(key === "type" && SCHEMA_TYPE_NAMES.has(node));
@@ -919,7 +948,7 @@ export class Gate {
    * `_backfill_fields`. A failed write leaves the pin as it was. */
   private backfillFields(name: string, defn: ToolDef): void {
     const existing = this.pin.get(this._serverId, name);
-    if (existing === null || existing.contractFields !== undefined || existing.schema === null) return;
+    if (existing === null || existing.contractFields === CONTRACT_FIELDS_VERSION || existing.schema === null) return;
     try {
       if (hashTool(defn) !== existing.definitionHash) return;
       const schema = existing.schema as Record<string, unknown>;
@@ -1087,7 +1116,7 @@ export class Gate {
     try {
       const before = comparedFields(pinnedRec);
       const after = comparedFields(observedRec);
-      for (const key of comparedKeys(pinnedRec, observedRec, pinned.contractFields !== undefined)) {
+      for (const key of comparedKeys(pinnedRec, observedRec, pinned.contractFields === CONTRACT_FIELDS_VERSION)) {
         if (!jsonEqual(before[key], after[key])) changed.push(key);
       }
     } catch (exc) {
@@ -1183,7 +1212,7 @@ export class Gate {
     // A first outputSchema is additive, but strings in it reach the host the way a
     // description does. Mirrors the Python `_unhashed_drift` additive branch.
     const added = drift.filter((c) => c.kind === ChangeKind.OUTPUT_SCHEMA_ADDED);
-    if (added.length > 0 && paramCarriesText(observedRec["outputSchema"])) {
+    if (added.length > 0 && schemaCarriesText(observedRec["outputSchema"])) {
       return this.driftHold(
         pinned.toolName,
         added,
