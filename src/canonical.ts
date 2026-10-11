@@ -19,6 +19,7 @@
  * hashing. We replicate that exactly.
  */
 
+import { assignOwn, extraFields } from "./contractFields.js";
 import { createHash } from "node:crypto";
 
 const FLOAT_DIGITS = 17;
@@ -279,8 +280,9 @@ export function hashTool(defn: Record<string, unknown>): string {
 /**
  * Digest over the whole public contract a person reviews (port of Python
  * ``approval_digest``). Covers name, description, inputSchema, outputSchema,
- * annotations, and title. Pending approve tokens use this; pin drift still
- * uses ``hashTool``.
+ * annotations, and every other top-level field the server listed (title,
+ * icons, _meta, ...). Pending approve tokens use this; pin drift still uses
+ * ``hashTool``.
  */
 export function approvalDigest(defn: Record<string, unknown>): string {
   const payload: Record<string, unknown> = {
@@ -304,10 +306,9 @@ export function approvalDigest(defn: Record<string, unknown>): string {
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) {
     payload.annotations = ann;
   }
-  const title = defn.title;
-  if (typeof title === "string" && title.length > 0) {
-    payload.title = title;
-  }
+  // title, icons, _meta, execution and any later top-level field. The title
+  // rule is unchanged, so a digest over the 0.16 field set comes out the same.
+  assignOwn(payload, extraFields(defn));
   // Python: json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)
   const stable = dumpsSorted(payload);
   return createHash("sha256").update(Buffer.from(stable, "utf8")).digest("hex");

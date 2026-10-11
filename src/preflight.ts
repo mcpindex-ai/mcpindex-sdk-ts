@@ -5,6 +5,7 @@
  * PUBLIC schema for diff detail) — NEVER a token, by construction.
  */
 
+import { SCHEMA_MARKER_KEY } from "./contractFields.js";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -54,6 +55,12 @@ export interface PinnedTool {
    * Absent on pins written before this field; those behave as floating.
    */
   readonly launchKey?: string;
+  /**
+   * 2 when `schema` holds every top-level field the server listed (see
+   * contractFields). Absent on older pins, whose missing fields are filled in
+   * from the first matching list instead of read as a change.
+   */
+  readonly contractFields?: number;
 }
 
 export function utcNowIso(): string {
@@ -367,19 +374,28 @@ export class PreflightPin {
     const schema = row["schema"];
     const via = row["via"];
     const launchKey = row["launch_key"];
+    let fieldsV = row["contract_fields"];
+    let schemaIn = schema;
+    if (schema !== null && typeof schema === "object" && !Array.isArray(schema) && SCHEMA_MARKER_KEY in schema) {
+      const copy = { ...(schema as Record<string, unknown>) };
+      fieldsV = copy[SCHEMA_MARKER_KEY];
+      delete copy[SCHEMA_MARKER_KEY];
+      schemaIn = copy;
+    }
     return {
       serverId: sid,
       toolName: tname,
       definitionHash: dh,
       pinnedAt,
       schema:
-        schema !== null && typeof schema === "object" && !Array.isArray(schema)
-          ? (schema as ToolDef)
+        schemaIn !== null && typeof schemaIn === "object" && !Array.isArray(schemaIn)
+          ? (schemaIn as ToolDef)
           : null,
       via: typeof via === "string" && via.length > 0 ? via : "tofu",
       classification: row["classification"],
       launchKey:
         typeof launchKey === "string" && launchKey.length > 0 ? launchKey : undefined,
+      contractFields: Number.isInteger(fieldsV) ? (fieldsV as number) : undefined,
     };
   }
 
@@ -551,7 +567,11 @@ export class PreflightPin {
         definition_hash: p.definitionHash,
         pinned_at: p.pinnedAt,
       };
-      if (p.schema !== null) row["schema"] = p.schema;
+      if (p.schema !== null) {
+        // The contract_fields marker rides inside schema (see SCHEMA_MARKER_KEY).
+        row["schema"] =
+          p.contractFields !== undefined ? { ...p.schema, [SCHEMA_MARKER_KEY]: p.contractFields } : p.schema;
+      }
       if (p.via !== undefined && p.via !== "tofu") row["via"] = p.via;
       if (p.classification !== undefined) row["classification"] = p.classification;
       if (p.launchKey !== undefined && p.launchKey.length > 0) row["launch_key"] = p.launchKey;
