@@ -19,7 +19,7 @@
  * hashing. We replicate that exactly.
  */
 
-import { extraFields } from "./contractFields.js";
+import { assignOwn, extraFields } from "./contractFields.js";
 import { createHash } from "node:crypto";
 
 const FLOAT_DIGITS = 17;
@@ -308,7 +308,7 @@ export function approvalDigest(defn: Record<string, unknown>): string {
   }
   // title, icons, _meta, execution and any later top-level field. The title
   // rule is unchanged, so a digest over the 0.16 field set comes out the same.
-  Object.assign(payload, extraFields(defn));
+  assignOwn(payload, extraFields(defn));
   // Python: json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)
   const stable = dumpsSorted(payload);
   return createHash("sha256").update(Buffer.from(stable, "utf8")).digest("hex");

@@ -5,6 +5,7 @@
  * PUBLIC schema for diff detail) — NEVER a token, by construction.
  */
 
+import { SCHEMA_MARKER_KEY } from "./contractFields.js";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -373,15 +374,22 @@ export class PreflightPin {
     const schema = row["schema"];
     const via = row["via"];
     const launchKey = row["launch_key"];
-    const fieldsV = row["contract_fields"];
+    let fieldsV = row["contract_fields"];
+    let schemaIn = schema;
+    if (schema !== null && typeof schema === "object" && !Array.isArray(schema) && SCHEMA_MARKER_KEY in schema) {
+      const copy = { ...(schema as Record<string, unknown>) };
+      fieldsV = copy[SCHEMA_MARKER_KEY];
+      delete copy[SCHEMA_MARKER_KEY];
+      schemaIn = copy;
+    }
     return {
       serverId: sid,
       toolName: tname,
       definitionHash: dh,
       pinnedAt,
       schema:
-        schema !== null && typeof schema === "object" && !Array.isArray(schema)
-          ? (schema as ToolDef)
+        schemaIn !== null && typeof schemaIn === "object" && !Array.isArray(schemaIn)
+          ? (schemaIn as ToolDef)
           : null,
       via: typeof via === "string" && via.length > 0 ? via : "tofu",
       classification: row["classification"],
@@ -559,11 +567,14 @@ export class PreflightPin {
         definition_hash: p.definitionHash,
         pinned_at: p.pinnedAt,
       };
-      if (p.schema !== null) row["schema"] = p.schema;
+      if (p.schema !== null) {
+        // The contract_fields marker rides inside schema (see SCHEMA_MARKER_KEY).
+        row["schema"] =
+          p.contractFields !== undefined ? { ...p.schema, [SCHEMA_MARKER_KEY]: p.contractFields } : p.schema;
+      }
       if (p.via !== undefined && p.via !== "tofu") row["via"] = p.via;
       if (p.classification !== undefined) row["classification"] = p.classification;
       if (p.launchKey !== undefined && p.launchKey.length > 0) row["launch_key"] = p.launchKey;
-      if (p.contractFields !== undefined) row["contract_fields"] = p.contractFields;
       return row;
     });
     const payload = { version: PIN_STORE_VERSION, pins };

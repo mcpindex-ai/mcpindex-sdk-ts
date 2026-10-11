@@ -15,6 +15,21 @@
 
 export const CONTRACT_FIELDS_VERSION = 2;
 
+/** Where a pin file keeps the marker: inside `schema`, which gate 0.18 and SDK
+ * 0.16 keep whole when they rewrite a record. The store moves it out on load and
+ * back on write; `extraFields` skips it so a server cannot supply it. */
+export const SCHEMA_MARKER_KEY = "_mcpindex_contract_fields";
+
+/** Set an own enumerable property. Plain assignment of a JSON `__proto__` key
+ * would set the prototype instead and drop the key. */
+export function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+export function assignOwn(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const key of Object.keys(source)) setOwn(target, key, source[key]);
+}
+
 const HASHED_FIELDS = new Set(["name", "description", "inputSchema"]);
 const CLASSIFIED_FIELDS = new Set(["annotations", "outputSchema"]);
 
@@ -25,10 +40,10 @@ export function extraFields(entry: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return out;
   for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-    if (HASHED_FIELDS.has(key) || CLASSIFIED_FIELDS.has(key)) continue;
+    if (HASHED_FIELDS.has(key) || CLASSIFIED_FIELDS.has(key) || key === SCHEMA_MARKER_KEY) continue;
     if (value === undefined || value === null) continue;
     if (key === "title" && !(typeof value === "string" && value.length > 0)) continue;
-    out[key] = value;
+    setOwn(out, key, value);
   }
   return out;
 }
@@ -36,7 +51,9 @@ export function extraFields(entry: unknown): Record<string, unknown> {
 // The boolean hints the gate classifies. Every other annotation key,
 // annotations.title among them, is compared like a top-level field.
 const ANNOTATION_HINTS = new Set(["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]);
-export const ANNOTATION_TEXT_KEY = "annotations (other than the four hints)";
+// "annotations" itself: `extraFields` never carries a top-level "annotations",
+// so no server key can collide with it.
+export const ANNOTATION_TEXT_KEY = "annotations";
 
 /** What the gate compares on a hash match: the extra fields, plus the
  * annotation keys other than the four hints under one synthetic key that never
@@ -49,9 +66,9 @@ export function comparedFields(entry: unknown): Record<string, unknown> {
     const text: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(ann as Record<string, unknown>)) {
       if (ANNOTATION_HINTS.has(key) || value === undefined || value === null) continue;
-      text[key] = value;
+      setOwn(text, key, value);
     }
-    if (Object.keys(text).length > 0) out[ANNOTATION_TEXT_KEY] = text;
+    if (Object.keys(text).length > 0) setOwn(out, ANNOTATION_TEXT_KEY, text);
   }
   return out;
 }
@@ -80,7 +97,7 @@ export function missingExtraFields(
   const have = new Set(Object.keys(extraFields(pinnedSchema)));
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(extraFields(observed))) {
-    if (!have.has(key)) out[key] = value;
+    if (!have.has(key)) setOwn(out, key, value);
   }
   return out;
 }

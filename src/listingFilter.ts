@@ -11,7 +11,7 @@
  * well: `wrap()` routes the inner client's listTools to the wrapper.
  */
 
-import { extraFields } from "./contractFields.js";
+import { assignOwn, extraFields } from "./contractFields.js";
 import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
 import { Decision, type ToolDef } from "./preflight.js";
@@ -195,6 +195,6 @@ function publicContract(entry: unknown): ToolDef | null {
   };
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
-  Object.assign(record, extraFields(entry));
+  assignOwn(record, extraFields(entry));
   return record;
 }
