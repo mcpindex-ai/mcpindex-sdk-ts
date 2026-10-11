@@ -413,7 +413,11 @@ class Interceptor {
   }
 
   private openListingWindow(cursor: string | null): Set<string> {
-    if (cursor === null) this.listingNames = new Set();
+    if (cursor === null) {
+      this.listingNames = new Set();
+      this.gate.reloadPins();
+      this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
+    }
     return this.listingNames;
   }
 
@@ -426,7 +430,6 @@ class Interceptor {
         return replaceToolList(result, []);
       }
       this.gate.reloadPins();
-      this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
       this.observe(result);
       if (this.gate.posture === Posture.MONITOR) return result;
       const outcome = filterListing(this.gate, raw, window);
@@ -447,7 +450,11 @@ class Interceptor {
   }
 
   private emitWithheld(notices: WithheldNotice[]): void {
-    const prior = this.gate.pinnedTools().filter((pin) => this.priorNames.has(pin.toolName));
+    const storePins = this.gate.pinnedTools();
+    const prior =
+      this.priorNames.size > 0
+        ? storePins.filter((pin) => this.priorNames.has(pin.toolName))
+        : storePins;
     const klass = pendingClass(prior);
     const sharedKey =
       prior.length > 0 && prior.every((pin) => pin.launchKey === prior[0]!.launchKey)
@@ -481,14 +488,23 @@ class Interceptor {
   private observe(result: unknown): void {
     try {
       const tools = toolsFromResult(result);
+      this.gate.reloadPins();
+      const storePins = this.gate.pinnedTools();
+      const storeEmpty = storePins.length === 0;
+      // First-sight trust only when the pin store holds no pins for this server.
+      // An empty prior snapshot is not enough on a cursor-bearing first list.
       const allowNew =
-        this.priorNames.size === 0 ||
+        storeEmpty ||
         this.gate.posture === Posture.MONITOR ||
         this.gate.newTools === "tofu";
+      let prior = this.priorNames;
+      if (prior.size === 0 && !storeEmpty) {
+        prior = new Set(storePins.map((pin) => pin.toolName));
+      }
       for (const defn of tools) {
         const name = defn["name"] as string;
         this.observed.set(name, defn);
-        if (!this.priorNames.has(name) && !allowNew) continue;
+        if (!prior.has(name) && !allowNew) continue;
         this.gate.observe(name, defn);
       }
     } catch (exc) {

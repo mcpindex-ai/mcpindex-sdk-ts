@@ -175,6 +175,28 @@ test("two unnamed wrapped servers do not share pins", async () => {
   }
 });
 
+test("a cursor-first list on an already-pinned server leaves a new tool out", async () => {
+  const pin = new PreflightPin();
+  pin.put({
+    serverId: "srv",
+    toolName: "echo",
+    definitionHash: "ab".repeat(32),
+    pinnedAt: "2026-10-09T00:00:00+00:00",
+    schema: { ...BASE },
+  });
+  const session = {
+    async listTools(_args?: { cursor?: string }) {
+      return {
+        tools: [{ name: "evil3", description: "new", inputSchema: { type: "object", properties: {} } }],
+      };
+    },
+  };
+  const wrapped = wrap(session, { pin, serverId: "srv", posture: Posture.GUARD });
+  const listed = (await wrapped.listTools({ cursor: "p2" })) as { tools: { name: string }[] };
+  assert.deepEqual(listed.tools.map((t) => t.name), []);
+  assert.equal(pin.get("srv", "evil3"), null);
+});
+
 test("a deleted pin file does not silently start over", () => {
   const dir = mkdtempSync(join(tmpdir(), "mcpindex-pin-"));
   const path = join(dir, "pins.json");
