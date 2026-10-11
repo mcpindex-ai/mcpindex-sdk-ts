@@ -5,6 +5,14 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.16.1 - 2026-10-11
+
+### Security
+
+- A pin file deleted or replaced with a symlink or directory at runtime no longer clears the in-memory index into a first-sight empty store. The store stays tainted and refuses writes until restart review.
+- Stale `.lck` break restores a live lock when the renamed inode differs from the stale lstat. A symlink or empty directory at the lock path is removed after the age check.
+- Pin and ever-pinned temp files use `O_CREAT|O_EXCL|O_NOFOLLOW` with a random suffix.
+
 ## 0.16.0 - 2026-10-10
 
 ### Changed

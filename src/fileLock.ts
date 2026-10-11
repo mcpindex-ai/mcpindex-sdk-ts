@@ -15,11 +15,13 @@
 import {
   closeSync,
   constants,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -70,12 +72,49 @@ function tryBreakStale(lockPath: string): void {
   } catch {
     return;
   }
-  if (!st.isFile()) return;
   if (Date.now() - st.mtimeMs < STALE_MS) return;
+  if (!st.isFile()) {
+    // A symlink or directory at the lock path blocks every write forever.
+    if (st.isDirectory()) {
+      try {
+        rmdirSync(lockPath);
+      } catch {
+        throw new LockTimeoutError(
+          `lock path ${lockPath} is a non-empty directory`
+        );
+      }
+      return;
+    }
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // best effort
+    }
+    return;
+  }
   const aside = `${lockPath}.stale.${process.pid}.${process.hrtime.bigint()}`;
   try {
     renameSync(lockPath, aside);
   } catch {
+    return;
+  }
+  let asideSt;
+  try {
+    asideSt = lstatSync(aside);
+  } catch {
+    return;
+  }
+  if (asideSt.ino !== st.ino) {
+    try {
+      linkSync(aside, lockPath);
+    } catch {
+      // A new lock already exists at lockPath.
+    }
+    try {
+      unlinkSync(aside);
+    } catch {
+      // best effort
+    }
     return;
   }
   try {

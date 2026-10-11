@@ -52,6 +52,9 @@ test("monitor keeps the entry and a wrong type is left out", () => {
 });
 
 test("duplicate names and a withheld call", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-pending-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
   const notices: string[] = [];
   const session = {
     tools: [{ ...BASE }],
@@ -69,25 +72,31 @@ test("duplicate names and a withheld call", async () => {
       return { result: { ok: true } };
     },
   };
-  const wrapped = wrap(session, {
-    pin: new PreflightPin(),
-    serverId: "srv",
-    onWithheld: (_s, tool) => notices.push(tool),
-  });
-  await wrapped.listTools();
-  session.tools = [{ ...BASE, description: "two" }];
-  const listed = await wrapped.listTools();
-  assert.deepEqual(listed.tools, []);
-  assert.equal(listed.note, "kept");
-  assert.deepEqual(notices, ["echo"]);
-  await assert.rejects(wrapped.callTool({ name: "echo", arguments: {} }), (err: unknown) => {
-    assert.ok(err instanceof PreflightHold);
-    assert.match(err.verdict.reason, /escalation was not attempted/);
-    return true;
-  });
-  assert.equal(session.calls, 0);
-  const viaRequest = await wrapped.request({ method: "tools/list", params: {} });
-  assert.deepEqual(viaRequest.result.tools, []);
+  try {
+    const wrapped = wrap(session, {
+      pin: new PreflightPin(),
+      serverId: "srv",
+      onWithheld: (_s, tool) => notices.push(tool),
+    });
+    await wrapped.listTools();
+    session.tools = [{ ...BASE, description: "two" }];
+    const listed = await wrapped.listTools();
+    assert.deepEqual(listed.tools, []);
+    assert.equal(listed.note, "kept");
+    assert.deepEqual(notices, ["echo"]);
+    await assert.rejects(wrapped.callTool({ name: "echo", arguments: {} }), (err: unknown) => {
+      assert.ok(err instanceof PreflightHold);
+      assert.match(err.verdict.reason, /escalation was not attempted/);
+      return true;
+    });
+    assert.equal(session.calls, 0);
+    const viaRequest = await wrapped.request({ method: "tools/list", params: {} });
+    assert.deepEqual(viaRequest.result.tools, []);
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("replace keeps extra fields", () => {
@@ -215,4 +224,70 @@ test("a deleted pin file does not silently start over", () => {
   const verdict = g.decide("echo", BASE)[1];
   assert.equal(verdict.decision, Decision.HOLD);
   assert.equal(verdict.tamperEvidence, true);
+});
+
+test("runtime pin delete or symlink does not first-sight new tools", async () => {
+  const { mkdirSync, symlinkSync, writeFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "mcpindex-runtime-"));
+  const previous = process.env.MCPINDEX_STATE_DIR;
+  process.env.MCPINDEX_STATE_DIR = dir;
+  const evil = {
+    name: "evil",
+    description: "new",
+    inputSchema: { type: "object", properties: {} },
+  };
+  try {
+    for (const kind of ["delete", "symlink", "directory"] as const) {
+      const path = join(dir, `${kind}.json`);
+      const pin = new PreflightPin(path);
+      const session = {
+        tools: [{ ...BASE }],
+        async listTools() {
+          return { tools: this.tools };
+        },
+        async callTool(_params?: { name?: string; arguments?: Record<string, unknown> }) {
+          return { ok: true };
+        },
+      };
+      const wrapped = wrap(session, { pin, serverId: "srv", posture: Posture.GUARD });
+      await wrapped.listTools();
+      assert.ok(pin.get("srv", "echo"));
+      if (kind === "delete") {
+        rmSync(path);
+      } else if (kind === "symlink") {
+        rmSync(path);
+        const empty = join(dir, `${kind}-empty.json`);
+        writeFileSync(empty, '{"version":2,"pins":[]}\n');
+        symlinkSync(empty, path);
+      } else {
+        rmSync(path);
+        mkdirSync(path);
+      }
+      session.tools = [{ ...BASE }, evil];
+      const listed = (await wrapped.listTools()) as { tools: { name: string }[] };
+      assert.ok(
+        !listed.tools.some((t) => t.name === "evil"),
+        `${kind}: evil must not be shown`,
+      );
+      assert.equal(pin.get("srv", "evil"), null, `${kind}: evil must not be pinned`);
+      assert.ok(pin.tainted, `${kind}: store must be tainted`);
+      await assert.rejects(
+        () => wrapped.callTool({ name: "evil", arguments: {} }),
+        PreflightHold,
+      );
+      assert.throws(() => {
+        pin.put({
+          serverId: "srv",
+          toolName: "evil",
+          definitionHash: "ef".repeat(32),
+          pinnedAt: "2026-10-09T00:00:00+00:00",
+          schema: null,
+        });
+      });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.MCPINDEX_STATE_DIR;
+    else process.env.MCPINDEX_STATE_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

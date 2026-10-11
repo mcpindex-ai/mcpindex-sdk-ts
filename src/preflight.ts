@@ -5,7 +5,20 @@
  * PUBLIC schema for diff detail) — NEVER a token, by construction.
  */
 
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -383,7 +396,19 @@ export class PreflightPin {
 
   private recordsFromDisk(): PinnedTool[] | null {
     if (this.path === null) return [];
-    if (this.lstatStore(this.path) === null) return [];
+    const st = this.lstatStore(this.path);
+    if (st === null) {
+      if (wasEverPinned(this.path) || this.index.size > 0) {
+        this.taintedReason =
+          "baseline file is missing but this server was pinned before";
+        return null;
+      }
+      return [];
+    }
+    if (!st.isFile()) {
+      this.taintedReason = "baseline path is not a regular file";
+      return null;
+    }
     const savedIndex = this.index;
     const savedTaint = this.taintedReason;
     const savedUnsupported = this.newerFormat;
@@ -392,8 +417,9 @@ export class PreflightPin {
     this.newerFormat = false;
     this.loadIntoIndex();
     if (this.newerFormat || this.taintedReason !== null) {
+      const loadTaint = this.taintedReason;
       this.index = savedIndex;
-      this.taintedReason = savedTaint;
+      this.taintedReason = loadTaint ?? savedTaint;
       this.newerFormat = savedUnsupported || this.newerFormat;
       return null;
     }
@@ -447,7 +473,13 @@ export class PreflightPin {
       this.index.set(this.key(pin.serverId, pin.toolName), pin);
       return;
     }
+    if (this.taintedReason !== null) {
+      throw new Error("pin store is tainted");
+    }
     withExclusiveLock(this.path, () => {
+      if (this.taintedReason !== null) {
+        throw new Error("pin store is tainted");
+      }
       const records = this.recordsFromDisk();
       if (records === null) throw new Error("pin store is unreadable");
       this.index = new Map(records.map((p) => [this.key(p.serverId, p.toolName), p]));
@@ -460,6 +492,9 @@ export class PreflightPin {
   private flush(): void {
     const path = this.path;
     if (path === null) return;
+    if (this.taintedReason !== null) {
+      throw new Error("pin store is tainted");
+    }
     const pins = [...this.index.values()].map((p) => {
       const row: Record<string, unknown> = {
         server_id: p.serverId,
@@ -476,12 +511,19 @@ export class PreflightPin {
     const payload = { version: PIN_STORE_VERSION, pins };
     const directory = dirname(path) || ".";
     mkdirSync(directory, { recursive: true });
-    const tmp = join(directory, `.${basename(path)}.${process.pid}.tmp`);
+    const suffix = randomBytes(8).toString("hex");
+    const tmp = join(directory, `.${basename(path)}.${process.pid}.${suffix}.tmp`);
     const encoded = Buffer.from(stableStringify(payload), "utf8");
-    const fd = openSync(tmp, "w", 0o600);
+    let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+    if (typeof constants.O_NOFOLLOW === "number") {
+      flags |= constants.O_NOFOLLOW;
+    }
+    const fd = openSync(tmp, flags, 0o600);
     try {
       writeSync(fd, encoded);
+      fsyncSync(fd);
       closeSync(fd);
+      chmodSync(tmp, 0o600);
       renameSync(tmp, path);
     } catch (err) {
       try {
@@ -554,8 +596,13 @@ function recordEverPinned(storePath: string): void {
     stores.push(name);
     const directory = dirname(indexPath) || ".";
     mkdirSync(directory, { recursive: true });
-    const tmp = join(directory, `.ever-pinned.${process.pid}.tmp`);
-    const fd = openSync(tmp, "w", 0o600);
+    const suffix = randomBytes(8).toString("hex");
+    const tmp = join(directory, `.ever-pinned.${process.pid}.${suffix}.tmp`);
+    let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+    if (typeof constants.O_NOFOLLOW === "number") {
+      flags |= constants.O_NOFOLLOW;
+    }
+    const fd = openSync(tmp, flags, 0o600);
     try {
       writeSync(fd, Buffer.from(stableStringify({ stores: [...stores].sort() }), "utf8"));
       fsyncSync(fd);
