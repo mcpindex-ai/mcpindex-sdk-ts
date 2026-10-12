@@ -41,7 +41,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 /** Sanitize a remote-server-controlled label (tool/server name) before it is rendered into a
  * stderr line: drop ANSI escapes / CR / LF / other control bytes and bound the length. Defends
  * the terminal and any downstream log parser against forged-line / escape-sequence injection. */
-function safeLabel(value: unknown): string {
+export function safeLabel(value: unknown): string {
   const text = typeof value === "string" ? value : String(value);
   return text.replace(CONTROL_CHARS, "").slice(0, MAX_LABEL);
 }

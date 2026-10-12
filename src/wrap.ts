@@ -27,7 +27,8 @@
  * shared Gate reads only the PUBLIC contract.
  */
 
-import { assignOwn, extraFields } from "./contractFields.js";
+import { ContextWatcher, defaultContextStorePath, type ContextObservation } from "./contextWatch.js";
+import { assignOwn, listedFields } from "./contractFields.js";
 import {
   Gate,
   Ownership,
@@ -65,7 +66,7 @@ import { ErrorStore, Operation } from "./errors.js";
 import { Action, LocalStats, OutcomeStore } from "./outcomes.js";
 import { surfaceProvenance } from "./provenance.js";
 import type { Provenance } from "./provenance.js";
-import { AmbientNotifier } from "./ambient.js";
+import { AmbientNotifier, safeLabel } from "./ambient.js";
 import type { AmbientObserver } from "./ambient.js";
 
 const DEFAULT_BEHAVIORAL_MANDATED_KINDS: ReadonlySet<ChangeKind> = new Set([
@@ -123,6 +124,9 @@ export interface WrapOptions {
   /** `"memory"` keeps pins in this process only. `"file"` forces the file store
    * even without a `serverId`. The default is a file when `serverId` is set. */
   pinStore?: "memory" | "file";
+  /** Called when the server's `instructions` are first pinned or change. Observation
+   * only: `getInstructions()` still returns what the server sent. Needs a file pin store. */
+  onContextDrift?: ((obs: ContextObservation) => void) | null;
   /** Called when a tool is left out of a list: server id, tool, reason, live hash. */
   onWithheld?: ((serverId: string, tool: string, reason: string, definitionHash: string) => void) | null;
   /** Logical id the tools are pinned under. Optional: defaults to
@@ -262,7 +266,7 @@ function toolToDict(entry: unknown): ToolDef | null {
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   const outp = attrOrKey(entry, "outputSchema");
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
-  assignOwn(record, extraFields(entry));
+  assignOwn(record, listedFields(entry));
   return record;
 }
 
@@ -344,6 +348,13 @@ class Interceptor {
   // list page that started after the notification carries it; until then its calls hold
   // under guard and strict. Per name, because the MCP client's refresh reads page 1 only.
   private staleNames = new Set<string>();
+  private readonly contextWatcher: ContextWatcher | null;
+  private contextObserved = false;
+  // Names pinned by the current list window when it opened on an empty, untainted
+  // store; null when no window may pin on first sight. Ended by list_changed, any
+  // call, the page that ends the list, and the next cursorless list.
+  private firstSightNames: Set<string> | null = null;
+  private firstSightEpoch = -1;
   private listEpoch = 0;
   private readonly onWithheld: WrapOptions["onWithheld"];
   private readonly lastSurface = new Map<string, string>();
@@ -383,6 +394,54 @@ class Interceptor {
     // under DO_NOT_TRACK). `onInvocation` lets an integrator render the signal in their
     // own UI. The notifier never touches stdout or the gate decision.
     this.ambient = AmbientNotifier.fromEnv({ observer: opts.onInvocation });
+    this.contextWatcher = this.buildContextWatcher(opts.onContextDrift ?? null);
+  }
+
+  private buildContextWatcher(onDrift: ((obs: ContextObservation) => void) | null): ContextWatcher | null {
+    const path = this.gate.pinStore.path;
+    if (path === null) return null;
+    const watcherPath = defaultContextStorePath(path);
+    return new ContextWatcher(
+      watcherPath,
+      this.gate.serverId,
+      (obs) => {
+        const kinds = obs.kinds.length > 0 ? obs.kinds.join(", ") : obs.detail || "-";
+        process.stderr.write(
+          `mcpindex: context surface ${obs.outcome} on ${safeLabel(obs.serverId)} (${safeLabel(kinds)}); baseline ${watcherPath}\n`,
+        );
+        if (onDrift !== null) onDrift(obs);
+      },
+      utcNowIso,
+    );
+  }
+
+  /** Read `getInstructions()` once per connection and observe it. Never throws,
+   * never changes what the session returns. */
+  observeContext(target: SessionLike): void {
+    if (this.contextWatcher === null || this.contextObserved) return;
+    try {
+      const getter = Reflect.get(target, "getInstructions", target);
+      const version = Reflect.get(target, "getServerVersion", target);
+      if (typeof getter !== "function" || typeof version !== "function") return;
+      if ((version as AnyFn).call(target) === undefined) return; // not connected yet
+      this.contextObserved = true;
+      this.contextWatcher.observe((getter as AnyFn).call(target), "initialize", null);
+    } catch {
+      // observing must never break the session
+    }
+  }
+
+  connectAndObserve(target: SessionLike, connect: AnyFn, args: unknown[]): unknown {
+    this.contextObserved = false;
+    const result = connect.apply(target, args);
+    if (isThenable(result)) {
+      return result.then((value) => {
+        this.observeContext(target);
+        return value;
+      });
+    }
+    this.observeContext(target);
+    return result;
   }
 
   /** Emit the ambient "watching this tool" signal on the PROCEED path. Fully isolated and
@@ -429,10 +488,11 @@ class Interceptor {
   listTools(target: SessionLike, args: unknown[]): unknown {
     const window = this.openListingWindow(cursorOfList(args));
     const epoch = this.listEpoch;
+    const firstSight = this.firstSightNames;
     const raw = this.rawListTools ?? (target.listTools as AnyFn);
     const result = raw.apply(target, args);
-    if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch));
-    return this.filterList(result, window, epoch);
+    if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch, firstSight));
+    return this.filterList(result, window, epoch, firstSight);
   }
 
   /** Route the inner client's own listTools and its notification handlers
@@ -513,6 +573,7 @@ class Interceptor {
 
   private markListChanged(): void {
     this.listEpoch += 1;
+    this.firstSightNames = null;
     if (this.gate.posture === Posture.MONITOR) return;
     for (const name of this.observed.keys()) this.staleNames.add(name);
   }
@@ -522,11 +583,20 @@ class Interceptor {
       this.listingNames = new Set();
       this.gate.reloadPins();
       this.priorNames = new Set(this.gate.pinnedTools().map((pin) => pin.toolName));
+      // A list that opens on an empty, untainted store may pin its later pages too.
+      this.firstSightNames =
+        this.priorNames.size === 0 && this.gate.pinStore.tainted === null ? new Set() : null;
+      this.firstSightEpoch = this.listEpoch;
     }
     return this.listingNames;
   }
 
-  private filterList(result: unknown, window: Set<string>, epoch: number = this.listEpoch): unknown {
+  private filterList(
+    result: unknown,
+    window: Set<string>,
+    epoch: number = this.listEpoch,
+    firstSight: Set<string> | null = null,
+  ): unknown {
     try {
       if (!carriesTools(result)) return result;
       const raw = rawToolEntries(result);
@@ -535,7 +605,7 @@ class Interceptor {
         return replaceToolList(result, []);
       }
       this.gate.reloadPins();
-      this.observe(result);
+      this.observe(result, epoch, firstSight);
       // A page that began after the last list_changed is a fresh read of the names it carries.
       if (epoch === this.listEpoch && this.staleNames.size > 0) {
         for (const defn of toolsFromResult(result)) this.staleNames.delete(defn["name"] as string);
@@ -594,7 +664,7 @@ class Interceptor {
     }
   }
 
-  private observe(result: unknown): void {
+  private observe(result: unknown, epoch: number = this.listEpoch, captured: Set<string> | null = null): void {
     try {
       const tools = toolsFromResult(result);
       this.gate.reloadPins();
@@ -602,8 +672,17 @@ class Interceptor {
       const storeEmpty = storePins.length === 0;
       // First-sight trust only when the pin store holds no pins for this server.
       // An empty prior snapshot is not enough on a cursor-bearing first list.
+      // The window this request opened in, and only while it is still the current one.
+      const window = captured !== null && captured === this.firstSightNames ? captured : null;
+      // Still the current window, and every pin the server holds was written by it.
+      const firstSight =
+        window !== null &&
+        epoch === this.firstSightEpoch &&
+        epoch === this.listEpoch &&
+        storePins.every((pin) => window.has(pin.toolName));
       const allowNew =
         storeEmpty ||
+        firstSight ||
         this.gate.posture === Posture.MONITOR ||
         this.gate.newTools === "tofu";
       let prior = this.priorNames;
@@ -621,7 +700,19 @@ class Interceptor {
           // later call holds. Do not break the listing.
           continue;
         }
+        if (firstSight || storeEmpty) {
+          const current = this.firstSightNames;
+          // Two lists in flight on a first run: a stale response's names belong to the
+          // current window too, when that window opened in the same epoch.
+          if (current !== null && (current === window || (storeEmpty && this.firstSightEpoch === epoch))) {
+            current.add(name);
+          }
+        }
       }
+      // The last page ends the window.
+      const next =
+        result !== null && typeof result === "object" ? (result as Record<string, unknown>)["nextCursor"] : undefined;
+      if (!next && window !== null && this.firstSightNames === window) this.firstSightNames = null;
     } catch (exc) {
       this.gate.captureError(exc, Operation.LIST_TOOLS, "wrap.observe");
     }
@@ -768,9 +859,10 @@ class Interceptor {
     if (method === "tools/list") {
       const window = this.openListingWindow(cursorOfRequest(args[0]));
       const epoch = this.listEpoch;
+      const firstSight = this.firstSightNames;
       const result = (reqFn as AnyFn).apply(target, args);
-      if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch));
-      return this.filterList(result, window, epoch);
+      if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch, firstSight));
+      return this.filterList(result, window, epoch, firstSight);
     }
     if (method !== "tools/call") {
       return (reqFn as AnyFn).apply(target, args);
@@ -898,6 +990,8 @@ class Interceptor {
   }
 
   private decideOrInternalHold(name: string, operation: Operation): PreflightVerdict {
+    // A call ends any first-sight window: from here on the server is in use.
+    this.firstSightNames = null;
     if (this.staleNames.has(name) && this.gate.posture !== Posture.MONITOR) {
       const verdict = makeVerdict({
         serverId: this.gate.serverId,
@@ -1130,6 +1224,8 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
   const sess = session as unknown as SessionLike;
   const interceptor = new Interceptor(sess, opts);
   interceptor.installRefreshHooks(sess);
+  // Wrapped after connect: the instructions are already in hand.
+  interceptor.observeContext(sess);
 
   const handler: ProxyHandler<SessionLike> = {
     get(target, prop, _receiver) {
@@ -1166,6 +1262,11 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
         const real = Reflect.get(target, "experimental", target);
         if (real === null || typeof real !== "object") return real;
         return interceptor.wrapExperimental(real as ExperimentalLike);
+      }
+      if (prop === "connect") {
+        const realConnect = Reflect.get(target, "connect", target);
+        if (typeof realConnect !== "function") return realConnect;
+        return (...args: unknown[]): unknown => interceptor.connectAndObserve(target, realConnect as AnyFn, args);
       }
       if (prop === "close") {
         // The SDK `Protocol.close()` is the wrapper's natural session-dispose hook (the

@@ -11,7 +11,7 @@
  * well: `wrap()` routes the inner client's listTools to the wrapper.
  */
 
-import { assignOwn, extraFields } from "./contractFields.js";
+import { assignOwn, listedFields } from "./contractFields.js";
 import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
 import { Decision, type ToolDef } from "./preflight.js";
@@ -142,7 +142,8 @@ function notice(gate: Gate, name: string, reason: string, entry: unknown): Withh
   const reviewable =
     reason !== "listing check failed" &&
     reason !== "duplicate name in this tool list" &&
-    !reason.endsWith("is not an object");
+    !reason.endsWith("is not an object") &&
+    !reason.endsWith("is not a string");
   return {
     serverId: gate.serverId,
     toolName: name,
@@ -174,10 +175,16 @@ function wrongObjectField(entry: unknown): string | null {
   for (const key of OBJECT_FIELDS) {
     if (!(key in obj)) continue;
     const value = obj[key];
+    // undefined is absent: an in-process McpServer leaves `annotations: undefined` on a
+    // tool registered without annotations, and JSON would drop the key.
+    if (value === undefined) continue;
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       return `${key} is not an object`;
     }
   }
+  // The spec makes title a string; a host may still render an object or list as text.
+  const title = obj["title"];
+  if (title !== undefined && title !== null && typeof title !== "string") return "title is not a string";
   return null;
 }
 
@@ -195,6 +202,6 @@ function publicContract(entry: unknown): ToolDef | null {
   };
   if (ann !== null && typeof ann === "object" && !Array.isArray(ann)) record["annotations"] = ann;
   if (outp !== null && typeof outp === "object" && !Array.isArray(outp)) record["outputSchema"] = outp;
-  assignOwn(record, extraFields(entry));
+  assignOwn(record, listedFields(entry));
   return record;
 }

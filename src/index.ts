@@ -9,6 +9,8 @@
 
 export { wrap, repin, PreflightHold, DEFAULT_SERVER_ID } from "./wrap.js";
 export type { Wrapped, WrapOptions } from "./wrap.js";
+export { defaultContextStorePath } from "./contextWatch.js";
+export type { ContextObservation, ContextOutcome } from "./contextWatch.js";
 
 export {
   approveOne,

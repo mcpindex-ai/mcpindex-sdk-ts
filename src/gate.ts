@@ -30,7 +30,8 @@ import {
   comparedFields,
   comparedKeys,
   fieldLabel,
-  missingExtraFields,
+  fieldsToBackfill,
+  isComplete,
 } from "./contractFields.js";
 import { assess, blastRank } from "./risk.js";
 import { classifyToolDef } from "./actionClass.js";
@@ -112,6 +113,7 @@ const DANGEROUS_REASON_MARKERS: readonly string[] = [
   "schema text changed",
   // title, icons, _meta, execution or a later top-level field on a hash-matched tool.
   "a tool field outside the definition hash changed",
+  "outputSchema text was added",
   "behavioral validation FAILED",
   "behavioral validation UNAVAILABLE",
   "behavioral validation DECLINED",
@@ -737,6 +739,35 @@ export interface GateEffect {
   drift?: readonly Change[];
 }
 
+const NAMED_SCHEMA_MAPS = new Set(["properties", "patternProperties", "$defs", "definitions"]);
+
+/** A schema carries text the host may pass on: a non-type-name string, or any name
+ * under properties / patternProperties / $defs / definitions. Mirrors Python
+ * `_schema_carries_text`. */
+function schemaCarriesText(node: unknown): boolean {
+  return paramCarriesText(node) || hasNamedMap(node);
+}
+
+function hasNamedMap(node: unknown, depth = 0): boolean {
+  if (depth > 64) return true;
+  if (Array.isArray(node)) return node.some((item) => hasNamedMap(item, depth + 1));
+  if (node !== null && typeof node === "object") {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (
+        NAMED_SCHEMA_MAPS.has(key) &&
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.keys(value).length > 0
+      ) {
+        return true;
+      }
+      if (hasNamedMap(value, depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
 function paramCarriesText(node: unknown, key?: string): boolean {
   if (typeof node === "string") {
     return !(key === "type" && SCHEMA_TYPE_NAMES.has(node));
@@ -918,11 +949,11 @@ export class Gate {
    * `_backfill_fields`. A failed write leaves the pin as it was. */
   private backfillFields(name: string, defn: ToolDef): void {
     const existing = this.pin.get(this._serverId, name);
-    if (existing === null || existing.contractFields !== undefined || existing.schema === null) return;
+    if (existing === null || existing.contractFields === CONTRACT_FIELDS_VERSION || existing.schema === null) return;
     try {
       if (hashTool(defn) !== existing.definitionHash) return;
       const schema = existing.schema as Record<string, unknown>;
-      const merged = { ...schema, ...missingExtraFields(schema, defn as Record<string, unknown>) };
+      const merged = { ...schema, ...fieldsToBackfill(schema, defn as Record<string, unknown>, existing.contractFields) };
       this.pin.put({ ...existing, schema: merged as ToolDef, contractFields: CONTRACT_FIELDS_VERSION });
     } catch {
       // a backfill must never break the listing
@@ -1086,7 +1117,7 @@ export class Gate {
     try {
       const before = comparedFields(pinnedRec);
       const after = comparedFields(observedRec);
-      for (const key of comparedKeys(pinnedRec, observedRec, pinned.contractFields !== undefined)) {
+      for (const key of comparedKeys(pinnedRec, observedRec, isComplete(pinned.contractFields))) {
         if (!jsonEqual(before[key], after[key])) changed.push(key);
       }
     } catch (exc) {
@@ -1178,8 +1209,19 @@ export class Gate {
       );
     }
     const mandated = drift.filter((c) => this.behavioralMandatedKinds.has(c.kind)).map((c) => c.kind.toString());
-    if (mandated.length === 0) return null;
-    return this.behavioralInconclusive(pinned.toolName, drift, mandated);
+    if (mandated.length > 0) return this.behavioralInconclusive(pinned.toolName, drift, mandated);
+    // A first outputSchema is additive, but strings in it reach the host the way a
+    // description does. Mirrors the Python `_unhashed_drift` additive branch.
+    const added = drift.filter((c) => c.kind === ChangeKind.OUTPUT_SCHEMA_ADDED);
+    if (added.length > 0 && schemaCarriesText(observedRec["outputSchema"])) {
+      return this.driftHold(
+        pinned.toolName,
+        added,
+        "contract DRIFTED: outputSchema text was added to a pinned tool (strings the host passes on and the hash does not cover); review and re-pin if expected",
+        HoldClass.DRIFT,
+      );
+    }
+    return null;
   }
 
   private validateDrift(
