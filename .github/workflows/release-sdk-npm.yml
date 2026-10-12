@@ -87,6 +87,12 @@ jobs:
           npm ci
           bash scripts/ci-test.sh
 
+      # Runs on the dist/ that ci-test.sh just built. `files` ships dist/src wholesale,
+      # so this is what stops a stray file in it from reaching npm. Must stay before the
+      # publish step.
+      - name: Shipped-file allowlist (npm pack vs scripts/ship-allowlist.json)
+        run: python3 scripts/check_shipped_files.py
+
       # This repository is public, which is the condition npm requires before it
       # will attach a provenance attestation. --provenance is explicit so a later
       # edit cannot drop it and still look like a successful publish.
