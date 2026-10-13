@@ -5,6 +5,13 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## 0.18.1 - 2026-10-13
+
+### Changed
+
+- A `tools/list` read through `requestStream`, on the session or on `experimental.tasks`, goes through the same listing filter as `listTools`. Before, a tool that `listTools` leaves out still came back that way.
+- With `scanResults`, a result that arrives through a stream is scanned like a `callTool` result: `requestStream` with `tools/call` on either seam, and `experimental.tasks.callToolStream`. So is a task's result read later through `request({method: "tasks/result"})`, `getTaskResult` or `experimental.tasks.getTaskResult`, under the name of the tool whose gated call created the task. Without `scanResults` nothing changes.
+
 ## 0.18.0 - 2026-10-11
 
 ### Security
