@@ -302,6 +302,13 @@ function cursorOfRequest(request: unknown): string | null {
   return cursorText((params as { cursor?: unknown }).cursor);
 }
 
+/** The task id a `tasks/result` request names, or that a CreateTaskResult carries. */
+function taskIdOf(value: unknown, key: "params" | "task"): string | null {
+  const holder = attrOrKey(value, key);
+  const id = attrOrKey(holder, "taskId");
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
 function cursorText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -348,6 +355,8 @@ class Interceptor {
   // list page that started after the notification carries it; until then its calls hold
   // under guard and strict. Per name, because the MCP client's refresh reads page 1 only.
   private staleNames = new Set<string>();
+  // Task id -> the tool whose gated call created it, so a task result is scanned under that name.
+  private readonly taskTools = new Map<string, string>();
   private readonly contextWatcher: ContextWatcher | null;
   private contextObserved = false;
   // Names pinned by the current list window when it opened on an empty, untainted
@@ -864,6 +873,9 @@ class Interceptor {
       if (isThenable(result)) return result.then((r) => this.filterList(r, window, epoch, firstSight));
       return this.filterList(result, window, epoch, firstSight);
     }
+    if (method === "tasks/result") {
+      return this.gateResult(this.taskToolName(taskIdOf(args[0], "params")), (reqFn as AnyFn).apply(target, args));
+    }
     if (method !== "tools/call") {
       return (reqFn as AnyFn).apply(target, args);
     }
@@ -875,7 +887,12 @@ class Interceptor {
       // resolves a CallToolResult (the SAME shape `gateResult` extracts content/structuredContent
       // from). A transport/schema that resolves a raw envelope instead -> content/structuredContent
       // absent -> not scanned (v1 boundary, documented; the pre-call gate still covers the call).
-      return this.gateResult(toolName, (reqFn as AnyFn).apply(target, args));
+      // A task-augmented call resolves a CreateTaskResult; its id is kept for the later result.
+      const raw = (reqFn as AnyFn).apply(target, args);
+      const noted = isThenable(raw)
+        ? raw.then((value) => this.noteTask(toolName, value, "task"))
+        : this.noteTask(toolName, raw, "task");
+      return this.gateResult(toolName, noted);
     }
     // The SDK `request()` is async (returns a Promise<SchemaOutput>), so — like
     // `callTool` — a HOLD must surface as a REJECTED Promise, not a sync throw,
@@ -900,15 +917,81 @@ class Interceptor {
    * `_client` for the experimental seam, which it captured itself). */
   requestStream(streamFn: AnyFn, receiver: unknown, args: unknown[]): AsyncGenerator<unknown> {
     const [method, toolName] = requestMethodAndTool(args[0]);
+    if (method === "tools/list") {
+      // The same listing filter as `request`: a list read through the stream is not a way around it.
+      const window = this.openListingWindow(cursorOfRequest(args[0]));
+      const epoch = this.listEpoch;
+      const firstSight = this.firstSightNames;
+      return this.gateStream(streamFn.apply(receiver, args) as AsyncGenerator<unknown>, "", (r) =>
+        this.filterList(r, window, epoch, firstSight),
+      );
+    }
+    if (method === "tasks/result") {
+      const name = this.taskToolName(taskIdOf(args[0], "params"));
+      return this.gateStream(streamFn.apply(receiver, args) as AsyncGenerator<unknown>, name, (r) =>
+        this.scanStreamed(name, r),
+      );
+    }
     if (method !== "tools/call") {
       return streamFn.apply(receiver, args) as AsyncGenerator<unknown>;
     }
     const verdict = this.decideOrInternalHold(toolName, Operation.SEND_REQUEST);
     if (verdict.decision === Decision.PROCEED) {
       if (verdict.failOpenWarning) warn(verdict);
-      return streamFn.apply(receiver, args) as AsyncGenerator<unknown>;
+      return this.gateStream(streamFn.apply(receiver, args) as AsyncGenerator<unknown>, toolName, (r) =>
+        this.scanStreamed(toolName, r),
+      );
     }
     return this.refuseStream(toolName, verdict);
+  }
+
+  /** Pass a request stream through, gating each `result` message with `onResult` and
+   * keeping the id of any task the stream creates. A HOLD thrown by `onResult` ends
+   * the stream for the caller, and the upstream stream is closed. */
+  private async *gateStream(
+    upstream: AsyncGenerator<unknown>,
+    name: string,
+    onResult: (result: unknown) => unknown,
+  ): AsyncGenerator<unknown> {
+    for await (const message of upstream) {
+      const type = attrOrKey(message, "type");
+      if (type === "taskCreated") this.noteTask(name, message, "task");
+      if (type !== "result") {
+        yield message;
+        continue;
+      }
+      const result = attrOrKey(message, "result");
+      // An onHold callback may answer with a Promise; the stream yields what it resolves to.
+      const gated = await Promise.resolve(onResult(result));
+      yield gated === result ? message : { ...(message as Record<string, unknown>), result: gated };
+    }
+  }
+
+  /** The result scan for a streamed result, which arrives as a value. */
+  private scanStreamed(name: string, result: unknown): unknown {
+    return this.scanResults ? this.gateResultValue(name, result) : result;
+  }
+
+  private noteTask(name: string, value: unknown, key: "task"): unknown {
+    const id = taskIdOf(value, key);
+    if (id !== null && name) {
+      // Bounded like the Python wrapper's map: the oldest entry goes first.
+      if (this.taskTools.size >= 1024 && !this.taskTools.has(id)) {
+        this.taskTools.delete(this.taskTools.keys().next().value as string);
+      }
+      this.taskTools.set(id, name);
+    }
+    return value;
+  }
+
+  /** Session-level `getTaskResult({taskId}, ...)`: the result scan, under the creating tool's name. */
+  taskResult(target: SessionLike, args: unknown[]): unknown {
+    const name = this.taskToolName(taskIdOf({ params: args[0] }, "params"));
+    return this.gateResult(name, (target["getTaskResult"] as AnyFn).apply(target, args));
+  }
+
+  private taskToolName(taskId: string | null): string {
+    return (taskId !== null && this.taskTools.get(taskId)) || "";
   }
 
   /** A HELD streaming seam: an async generator that raises the SAME
@@ -950,9 +1033,18 @@ class Interceptor {
             const verdict = self.decideOrInternalHold(toolName, Operation.SEND_REQUEST);
             if (verdict.decision === Decision.PROCEED) {
               if (verdict.failOpenWarning) warn(verdict);
-              return (realTasks.callToolStream as AnyFn).apply(realTasks, a) as AsyncGenerator<unknown>;
+              const upstream = (realTasks.callToolStream as AnyFn).apply(realTasks, a) as AsyncGenerator<unknown>;
+              return self.gateStream(upstream, toolName, (r) => self.scanStreamed(toolName, r));
             }
             return self.refuseStream(toolName, verdict);
+          };
+        }
+        if (prop === "getTaskResult" && typeof Reflect.get(t, prop, t) === "function") {
+          // getTaskResult(taskId, resultSchema?, options?) reads a task's result off the
+          // unwrapped client; scan it like the call that created the task.
+          return (...a: unknown[]): unknown => {
+            const name = self.taskToolName(typeof a[0] === "string" ? a[0] : null);
+            return self.gateResult(name, (realTasks.getTaskResult as AnyFn).apply(realTasks, a));
           };
         }
         if (prop === "requestStream") {
@@ -1253,6 +1345,12 @@ export function wrap<T extends object>(session: T, opts: WrapOptions = {}): Wrap
           }
           return interceptor.requestStream(fn as AnyFn, target, args);
         };
+      }
+      if (prop === "getTaskResult" && typeof Reflect.get(target, prop, target) === "function") {
+        // getTaskResult({taskId}, resultSchema?, options?) reads a task's result; scan it
+        // like the call that created the task.
+        return (...args: unknown[]): unknown =>
+          interceptor.taskResult(target, args);
       }
       if (prop === "experimental") {
         // The SDK `experimental` accessor returns an object whose `tasks` holds
