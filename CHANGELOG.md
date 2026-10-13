@@ -7,10 +7,14 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## 0.18.0 - 2026-10-11
 
+### Security
+
+- Fixes GHSA-phh5-4p9f-4qmg (https://github.com/mcpindex-ai/mcpindex-sdk-ts/security/advisories/GHSA-phh5-4p9f-4qmg), cases where changed or new tool text reached the agent under guard and strict. Affected: @mcp-index/sdk < 0.18.0 and mcpindex-gate < 0.20.0.
+
 ### Changed
 
 - The wrapper reads the server's `instructions` after connect, pins them beside the tool pins (`.<server>.context.json`, the same format the gate's proxy writes), and reports a first pin or a change through the new `onContextDrift` option and one stderr line. It never changes what `getInstructions()` returns. It needs a file pin store. A numbers-only change is reported; this SDK does not apply the gate's digit budget.
-- Under guard and strict a pinned tool that adds an outputSchema is left out once for review and its call holds when the schema carries any string or any name under properties, patternProperties, $defs or definitions. That covers most real outputSchemas, so expect one review per tool when a server starts returning structured output. A bare `{"type": "object"}` is still shown.
+- Under guard and strict a pinned tool that adds an outputSchema is left out once for review and its call holds when the schema carries any string or any name under properties, patternProperties, $defs or definitions. A property name counts, so expect one review per tool when a server starts returning structured output. A bare `{"type": "object"}` is still shown.
 - The first paginated list on an empty pin store pins every page. Before, page 2 was held as new tools on an already-pinned server. Only the list that opened on the empty store can do this, only while it is current, and only while every pin was written by it; a list_changed, any call, a newer list or the last page ends it.
 - A tool whose title is not a string is left out of the list as a wrong type, under guard and strict, and the title is never recorded. The field-set marker moves to 3; any marker from 2 up, including one from a newer version, counts as complete.
 - Pending records carry the field-set version. Approving one written by 0.16 leaves the pin to record its fields on the next list, so the tool is not held again right after approval; one written by 0.17 keeps its version.
