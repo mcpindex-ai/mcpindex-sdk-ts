@@ -165,6 +165,27 @@ export function canonicalBody(tool: unknown): Buffer | null {
   return text === null ? null : Buffer.from(text, "utf8");
 }
 
+/**
+ * Digest of a tool's top-level `_meta` (draft 1c): sha256 of the RFC 8785
+ * text of that value, under the same rules as the tool digest. Null when the
+ * tool has no `_meta`, or when its `_meta` has no digest.
+ */
+export function metaDigest(tool: unknown): string | null {
+  if (!isObject(tool) || !Object.prototype.hasOwnProperty.call(tool, "_meta")) return null;
+  const meta = own(tool, "_meta");
+  if (!wellFormed(meta, 0) || !numbersInRange(meta, 0)) return null;
+  try {
+    return digestOf(serialize(meta, 0, false));
+  } catch {
+    return null;
+  }
+}
+
+/** True when the tool object has a top-level `_meta` member of its own. */
+export function hasTopMeta(tool: unknown): boolean {
+  return isObject(tool) && Object.prototype.hasOwnProperty.call(tool, "_meta");
+}
+
 /** Digest of the server's instructions string (section 2.2), or null. */
 export function instructionsDigest(instructions: unknown): string | null {
   if (typeof instructions !== "string" || hasLoneSurrogate(instructions)) return null;
@@ -195,8 +216,9 @@ export function toolSetDigest(tools: readonly unknown[]): string | null {
     const digest = toolDigest(tool);
     if (digest === null) return null;
     const name = isObject(tool) ? own(tool, "name") : undefined;
-    // Python: str(tool.get("name", "")). Non-string names only matter for sort order.
-    const key = typeof name === "string" ? name : name === undefined ? "" : name === null ? "None" : String(name);
+    // The name only sets the order. One that is not a string sorts as "", as
+    // in the Python reference (sep_digest.tool_set_digest).
+    const key = typeof name === "string" ? name : "";
     pairs.push([key, digest]);
   }
   pairs.sort((a, b) => compareCodePoints(a[0], b[0]) || compareCodePoints(a[1], b[1]));

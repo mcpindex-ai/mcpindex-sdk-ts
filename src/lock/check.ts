@@ -7,7 +7,7 @@
  * writes to a lock; the lock changes only through LockStore.approve/revoke.
  */
 
-import { compareCodePoints, instructionsDigest, toolDigest } from "./digest.js";
+import { compareCodePoints, hasTopMeta, instructionsDigest, metaDigest, toolDigest } from "./digest.js";
 import { LockError, POSTURES, identityKey } from "./lock.js";
 import type { Identity, Lock, LockErrorReason, Posture } from "./lock.js";
 
@@ -15,6 +15,8 @@ export const LOCK_REFUSAL_CODE = -32011;
 export const LOCK_REFUSAL_MESSAGE = "Tool withheld by lock";
 
 export type ToolReason = "unlocked-server" | "duplicate-name" | "no-digest" | "new-tool" | "upstream-changed";
+/** Why a shown tool's top-level `_meta` was not relayed as approved (draft 1c). */
+export type MetaReason = "meta-changed" | "meta-unapproved";
 export type CallReason = ToolReason | LockErrorReason | "no-listing" | "not-listed" | "classifier-error" | "unreachable";
 
 export interface ToolOutcome {
@@ -41,6 +43,14 @@ export interface Decision {
   readonly callable: ReadonlySet<string>;
   /** Indexes into the listing's tools array of the entries the model may see. */
   readonly shownIndexes: readonly number[];
+  /**
+   * Shown tools whose served top-level `_meta` does not match the approved
+   * metaDigest: name to reason. Under guard that `_meta` is removed before the
+   * tool is relayed (stripMeta); under monitor it is relayed and reported.
+   */
+  readonly meta: ReadonlyMap<string, MetaReason>;
+  /** Indexes into the listing's tools array whose `_meta` is removed before relay. */
+  readonly stripMeta: ReadonlySet<number>;
   /** One row per named listing entry, for the listing event. */
   readonly tools: readonly ToolOutcome[];
   readonly served: number;
@@ -82,6 +92,8 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
   const withheld = new Map<string, ToolReason | LockErrorReason>();
   const flagged = new Map<string, ToolReason>();
   const callable = new Set<string>();
+  const meta = new Map<string, MetaReason>();
+  const stripMeta = new Set<number>();
   const tools: ToolOutcome[] = [];
 
   if (lock instanceof LockError) {
@@ -102,6 +114,8 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
       lockError: lock.reason,
       callable,
       shownIndexes,
+      meta: new Map(),
+      stripMeta: new Set(),
       tools,
       served: raw.length,
     });
@@ -132,6 +146,12 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
       return;
     }
     if (reason !== null) flagged.set(name, reason);
+    if (hasTopMeta(tool)) {
+      const approvedMeta = entry?.metaDigest;
+      if (approvedMeta === undefined) meta.set(name, "meta-unapproved");
+      else if (metaDigest(tool) !== approvedMeta) meta.set(name, "meta-changed");
+      if (meta.has(name) && guard) stripMeta.add(index);
+    }
     shown.push(name);
     shownIndexes.push(index);
     callable.add(name);
@@ -160,6 +180,8 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
     lockError: null,
     callable,
     shownIndexes,
+    meta,
+    stripMeta,
     tools,
     served: raw.length,
   });
@@ -189,11 +211,13 @@ export function checkCall(decision: Decision | null, name: string): "allow" | Ca
 export interface RefusalError {
   readonly code: typeof LOCK_REFUSAL_CODE;
   readonly message: string;
-  readonly data: { readonly reason: CallReason; readonly tool: string };
+  /** `tool` is left out when the call's name was not a string, as in the Python host. */
+  readonly data: { readonly reason: CallReason; readonly tool?: string };
 }
 
-export function refusalError(name: string, reason: CallReason): RefusalError {
-  return { code: LOCK_REFUSAL_CODE, message: LOCK_REFUSAL_MESSAGE, data: { reason, tool: name } };
+export function refusalError(name: string | null, reason: CallReason): RefusalError {
+  const data = name === null ? { reason } : { reason, tool: name };
+  return { code: LOCK_REFUSAL_CODE, message: LOCK_REFUSAL_MESSAGE, data };
 }
 
 /** Error thrown to callers who check through CallGate.enforce. */
@@ -212,11 +236,14 @@ export class LockRefusal extends Error {
   }
 }
 
+/** Default age after which a call first reloads the snapshot (section 9.8), as in the Python host. */
+export const DEFAULT_MAX_STALENESS_MS = 60_000;
+
 export interface CallGateOptions {
   /**
-   * Section 9.8: refuse calls with `lock-stale` once the snapshot behind the
-   * decision is older than this. LockedTransport reloads first and only
-   * refuses when the reload fails.
+   * Section 9.8: once the snapshot behind the decision is older than this, a
+   * call reloads it first (LockedTransport) and is refused with `lock-stale`
+   * when the reload fails. Default 60 s. Pass Infinity to never go stale.
    */
   readonly maxStalenessMs?: number;
   readonly now?: () => number;
@@ -224,22 +251,28 @@ export interface CallGateOptions {
 
 /**
  * Per-connection allow-list. `record` replaces the decision only when a
- * complete listing has been checked; a list_changed notification does not
- * clear it, so until the next listing completes the previous allow-list stays
- * and names that are new on the server are not callable.
+ * complete listing has been checked. A list_changed notification does not
+ * touch it. While a listing is being collected (`beginListing` until
+ * `record` or `markUnreachable`) every call is refused with `no-listing`, so
+ * nothing is called on the strength of a listing that is being replaced.
+ *
+ * Order of reasons: a listing in progress or no listing at all, then a
+ * whole-lock error, then `unreachable`, then `lock-stale`, then the per-name
+ * answer.
  */
 export class CallGate {
   #decision: Decision | null = null;
   #snapshotAt = 0;
   #snapshotId: string | null = null;
   #unreachable = false;
-  readonly #maxStalenessMs: number | null;
+  #collecting = 0;
+  readonly #maxStalenessMs: number;
   readonly #now: () => number;
 
   constructor(options: CallGateOptions = {}) {
-    const max = options.maxStalenessMs;
-    if (max !== undefined && !(Number.isFinite(max) && max >= 0)) throw new Error("maxStalenessMs must be >= 0");
-    this.#maxStalenessMs = max ?? null;
+    const max = options.maxStalenessMs ?? DEFAULT_MAX_STALENESS_MS;
+    if (!(max >= 0)) throw new Error("maxStalenessMs must be >= 0");
+    this.#maxStalenessMs = max;
     this.#now = options.now ?? Date.now;
   }
 
@@ -249,6 +282,20 @@ export class CallGate {
 
   get snapshotId(): string | null {
     return this.#snapshotId;
+  }
+
+  /** A listing started (its first page is in and more are being fetched). */
+  beginListing(): void {
+    this.#collecting += 1;
+  }
+
+  /** A listing that began ended without a decision (it failed or was dropped). */
+  endListing(): void {
+    if (this.#collecting > 0) this.#collecting -= 1;
+  }
+
+  get listingInProgress(): boolean {
+    return this.#collecting > 0;
   }
 
   /** Install the decision for the latest complete listing. */
@@ -269,14 +316,17 @@ export class CallGate {
   }
 
   isStale(): boolean {
-    if (this.#decision === null || this.#maxStalenessMs === null) return false;
+    if (this.#decision === null) return false;
     return this.#now() - this.#snapshotAt > this.#maxStalenessMs;
   }
 
   check(name: string): "allow" | CallReason {
+    if (this.#collecting > 0) return "no-listing";
+    const decision = this.#decision;
+    if (decision !== null && decision.lockError !== null) return decision.lockError;
     if (this.#unreachable) return "unreachable";
-    if (this.#decision !== null && this.isStale()) return "lock-stale";
-    return checkCall(this.#decision, name);
+    if (decision !== null && this.isStale()) return "lock-stale";
+    return checkCall(decision, name);
   }
 
   enforce(name: string): void {

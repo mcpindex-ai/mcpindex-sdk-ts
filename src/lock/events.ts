@@ -85,7 +85,9 @@ function base(ctx: EventContext): EventBase {
 }
 
 export function listingEvent(ctx: EventContext, decision: Decision, snapshotId: string): ListingEvent {
-  const withheld = decision.tools.filter((t) => t.decision === "withheld").length;
+  // As in the Python host: every served entry that is not shown counts as
+  // withheld, entries without a string name included.
+  const withheld = decision.served - decision.shown.length;
   return {
     ...base(ctx),
     type: "listing",
@@ -100,7 +102,9 @@ export function listingEvent(ctx: EventContext, decision: Decision, snapshotId: 
       reason: t.reason,
     })),
     removed: [...decision.removed],
-    instructions: decision.lockError !== null ? (decision.stripInstructions ? decision.lockError : null) : decision.instructions,
+    // Under a whole-lock failure the instructions are withheld with everything
+    // else and the event carries no instructions code, as in the Python host.
+    instructions: decision.lockError !== null ? null : decision.instructions,
     snapshotId,
   };
 }
