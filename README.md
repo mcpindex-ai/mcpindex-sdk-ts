@@ -195,9 +195,16 @@ Limits:
 - A digest says whether the contract changed. It says nothing about what the server does
   when a tool runs.
 - The AI SDK client does not refetch on `notifications/tools/list_changed`. After an approval
-  or a server change, call `tools()` again; until then the previous allow-list holds.
-- `@ai-sdk/mcp` needs Node >= 22, so this subpath does too. The rest of the package still runs
-  on Node 20.
+  or a server change, call `tools()` again; until then the previous allow-list holds. While a
+  listing is being collected, every call is refused with `no-listing`.
+- A tool's top-level `_meta` is not part of its digest. It reaches the client only when it
+  matches the `metaDigest` recorded at approval; otherwise, under guard, the tool is shown
+  without it and the decision reports `meta-changed` or `meta-unapproved`.
+- A store configured with a signer must also be given a sequence store (`sequencePath`), or
+  every load is `lock-signature-invalid`.
+- `@mcp-index/sdk/ai` imports only types from `@ai-sdk/mcp`, so loading it needs nothing at
+  runtime. The `@ai-sdk/mcp` peer itself needs Node >= 22; that is the only part with that
+  requirement, and the rest of the package runs on Node 20.
 - The AI SDK's own transports reject any message carrying a `__proto__` key before the wrapper
   sees it, so such a listing never arrives and nothing is callable. The official SDK transports
   pass it through and the lock withholds the tool. Instructions given to the client as
