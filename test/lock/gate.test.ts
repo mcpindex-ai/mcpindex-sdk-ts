@@ -1,6 +1,6 @@
 /**
  * CallGate order and default staleness, the _meta decision, and listing event
- * fields that must match the Python host (draft 1c).
+ * fields that must match the Python host (draft 1, revision 1d).
  */
 
 import assert from "node:assert/strict";
@@ -29,10 +29,11 @@ function lockOf(entries: Array<[string, unknown, string?]>): Lock {
 
 const SEARCH = { name: "search", inputSchema: { type: "object" } };
 
-test("call reason order: in progress, unreachable, none completed, whole-lock error, stale", () => {
+test("call reason order (section 9.5): no-listing, whole-lock error, unreachable, stale", () => {
   let clock = 0;
   const gate = new CallGate({ maxStalenessMs: 10, now: () => clock });
   assert.equal(gate.check("search"), "no-listing");
+  // A first listing that fails: one has ended, none completed.
   gate.markUnreachable();
   assert.equal(gate.check("search"), "unreachable");
   gate.beginListing();
@@ -40,6 +41,17 @@ test("call reason order: in progress, unreachable, none completed, whole-lock er
   gate.record(checkListing(new LockError("lock-unreadable", "x"), ID, { tools: [SEARCH] }, "guard"), SNAP);
   clock = 100;
   assert.equal(gate.check("search"), "lock-unreadable");
+  // A failed listing after one decided under a lock failure keeps the lock failure.
+  gate.beginListing();
+  assert.equal(gate.check("search"), "no-listing");
+  gate.markUnreachable();
+  assert.equal(gate.check("search"), "lock-unreadable");
+  // After a good listing, a failed one is unreachable, before lock-stale.
+  gate.record(checkListing(lockOf([["search", SEARCH]]), ID, { tools: [SEARCH] }, "guard"), { snapshotId: "t", loadedAt: clock });
+  assert.equal(gate.check("search"), "allow");
+  gate.markUnreachable();
+  clock = 1_000;
+  assert.equal(gate.check("search"), "unreachable");
 });
 
 test("S6: a whole-lock error is reported before lock-stale", () => {

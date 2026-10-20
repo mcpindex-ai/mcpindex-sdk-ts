@@ -269,10 +269,11 @@ export interface CallGateOptions {
  * `no-listing`, so nothing is called on the strength of a listing that is
  * being replaced.
  *
- * Order of reasons, as in the reference session (section 9.5): a listing in
- * progress, then `unreachable` after a failed listing, then `no-listing`
- * when none has completed, then a whole-lock error, then `lock-stale`, then
- * the per-name answer.
+ * Order of reasons (section 9.5): `no-listing` while a listing is in
+ * progress or before any listing has ended; then the whole-lock error of the
+ * latest completed listing, which a later failed listing does not clear;
+ * then `unreachable` after a failed listing; then `lock-stale`; then the
+ * per-name answer.
  */
 export class CallGate {
   #decision: Decision | null = null;
@@ -337,11 +338,10 @@ export class CallGate {
   }
 
   check(name: string): "allow" | CallReason {
-    if (this.#collecting) return "no-listing";
-    if (this.#unreachable) return "unreachable";
     const decision = this.#decision;
-    if (decision === null) return "no-listing";
-    if (decision.lockError !== null) return decision.lockError;
+    if (this.#collecting || (decision === null && !this.#unreachable)) return "no-listing";
+    if (decision !== null && decision.lockError !== null) return decision.lockError;
+    if (this.#unreachable || decision === null) return "unreachable";
     if (this.isStale()) return "lock-stale";
     return checkCall(decision, name);
   }
