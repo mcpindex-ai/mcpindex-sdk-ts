@@ -24,6 +24,8 @@ export const MANIFEST = "MANIFEST.json";
 export const SIGNATURE = "MANIFEST.json.sigstore";
 export const ALIASES = "aliases.json";
 export const SLUG_MAX = 48;
+/** Largest manifest sequence; every reader parses it exactly. */
+export const SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
 
 export const SHARD_NAME = /^([a-z0-9]+(?:-[a-z0-9]+)*)--([0-9a-f]{16})\.json$/;
 export const CONTRACT_NAME = /^sha256-([0-9a-f]{64})\.json$/;
@@ -129,7 +131,7 @@ function repr(value: unknown): string {
 
 export type RemoteIdentity = { readonly kind: "remote"; readonly url: string };
 export type PackageIdentity = { readonly kind: "stdio"; readonly package: string };
-export type CommandIdentity = { readonly kind: "stdio"; readonly command: string };
+export type CommandIdentity = { readonly kind: "stdio"; readonly command: string; readonly args: readonly string[] };
 export type Identity = RemoteIdentity | PackageIdentity | CommandIdentity;
 
 const DEFAULT_PORTS: Record<string, number> = { http: 80, https: 443 };
@@ -234,19 +236,104 @@ export function packageIdentity(registry: string, name: string): PackageIdentity
   return { kind: "stdio", package: `${registry}:${n}` };
 }
 
-export function commandIdentity(command: string): CommandIdentity {
+/**
+ * Section 3.2 command form: the basename of the command and every argument
+ * verbatim. Throws for a command that is not a basename once its path is
+ * removed, and for secret-looking arguments (section 3.2.1), which an identity
+ * can neither keep nor strip. The message names the rule, never the value.
+ */
+export function commandIdentity(command: string, args: readonly string[] = []): CommandIdentity {
   const parts = command.replace(/\\/g, "/").split("/");
   const base = parts[parts.length - 1] ?? "";
   if (!validCommand(base)) throw new Error(`invalid command ${repr(command)}`);
-  return { kind: "stdio", command: base };
+  if (!Array.isArray(args) || !args.every((a) => typeof a === "string" && !hasLoneSurrogate(a))) {
+    throw new Error("args must be strings without unpaired surrogates");
+  }
+  const problem = secretArgProblem(args);
+  if (problem !== null) {
+    throw new Error(`cannot form a server identity: ${problem}; move it to an env var or configure an alias`);
+  }
+  return Object.freeze({ kind: "stdio", command: base, args: Object.freeze([...args]) });
+}
+
+// Section 3.2.1. ASCII-only and case-insensitive; without the u flag, \b and
+// the i flag work on ASCII only, as in the Python port with re.ASCII.
+const SECRET_SEGMENTS = new Set([
+  "token", "secret", "password", "passwd", "pwd", "apikey", "auth", "authorization",
+  "credential", "credentials", "bearer", "cookie", "key", "pat", "privatekey", "session",
+]);
+const SECRET_VALUE = new RegExp(
+  [
+    "^(bearer|basic|token)[ \\t]+[^ \\t]",
+    "\\bsk-[A-Za-z0-9_-]{16,}",
+    "\\bsk_(live|test)_[A-Za-z0-9]{10,}",
+    "\\bgh[pousr]_[A-Za-z0-9]{20,}",
+    "\\bgithub_pat_[A-Za-z0-9_]{20,}",
+    "\\bglpat-[A-Za-z0-9_-]{16,}",
+    "\\bxox[abprs]-[A-Za-z0-9-]{10,}",
+    "\\bAKIA[0-9A-Z]{16}\\b",
+    "\\bAIza[0-9A-Za-z_-]{30,}",
+    "\\bnpm_[A-Za-z0-9]{30,}",
+    "-----BEGIN [A-Z ]*PRIVATE KEY",
+    "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.",
+  ].join("|"),
+  "i",
+);
+
+function secretName(name: string): boolean {
+  const segments = name.replace(/^-+/, "").toLowerCase().split(/[-_.]+/);
+  return segments.some((s) => SECRET_SEGMENTS.has(s)) || SECRET_SEGMENTS.has(segments.join(""));
+}
+
+function urlProblem(arg: string): string | null {
+  const at = arg.indexOf("://");
+  if (at === -1) return null;
+  const rest = arg.slice(at + 3);
+  const end = rest.search(/[/?#]/);
+  const authority = end === -1 ? rest : rest.slice(0, end);
+  const lastAt = authority.lastIndexOf("@");
+  if (lastAt !== -1 && authority.slice(0, lastAt).includes(":")) return "a URL argument carries a password in its userinfo";
+  const q = rest.indexOf("?");
+  if (q !== -1) {
+    const hash = rest.indexOf("#", q);
+    const query = rest.slice(q + 1, hash === -1 ? undefined : hash);
+    for (const part of query.split("&")) {
+      const eq = part.indexOf("=");
+      if (secretName(eq === -1 ? part : part.slice(0, eq))) return "a URL argument carries a credential in its query";
+    }
+  }
+  return null;
+}
+
+/** null if no argument is secret-looking under section 3.2.1, else what was found. */
+export function secretArgProblem(args: readonly string[]): string | null {
+  let valueOf: string | null = null;
+  for (const arg of args) {
+    if (valueOf !== null && !arg.startsWith("-")) return `the value of ${valueOf} looks like a credential`;
+    valueOf = null;
+    if (SECRET_VALUE.test(arg)) return "an argument matches a credential pattern";
+    const url = urlProblem(arg);
+    if (url !== null) return url;
+    const eq = arg.indexOf("=");
+    const head = eq === -1 ? arg : arg.slice(0, eq);
+    if (arg.startsWith("-")) {
+      if (secretName(head)) {
+        if (eq !== -1 && arg.length > eq + 1) return `${head} carries a credential`;
+        if (eq === -1) valueOf = head;
+      }
+      continue;
+    }
+    if (eq !== -1 && ENV_NAME.test(head) && secretName(head)) return `${head}= carries a credential`;
+  }
+  return null;
 }
 
 /** Validate a parsed identity object. Returns a fresh frozen copy or throws LockError. */
 export function validateIdentity(value: unknown): Identity {
-  if (!isObject(value)) throw unreadable("identity must be an object of strings");
+  if (!isObject(value)) throw unreadable("identity must be an object");
   const keys = Object.keys(value);
-  if (!keys.every((k) => typeof own(value, k) === "string")) {
-    throw unreadable("identity must be an object of strings");
+  if (!keys.every((k) => k === "args" || typeof own(value, k) === "string")) {
+    throw unreadable("identity members must be strings, args an array of strings");
   }
   const has = (...names: string[]): boolean => keys.length === names.length && names.every((n) => keys.includes(n));
   const kind = own(value, "kind");
@@ -273,25 +360,35 @@ export function validateIdentity(value: unknown): Identity {
       }
       return Object.freeze({ kind: "stdio", package: pkg });
     }
-    if (has("kind", "command")) {
+    if (has("kind", "command", "args")) {
       const command = own(value, "command") as string;
-      if (!validCommand(command)) throw unreadable(`command must be a basename: ${repr(command)}`);
-      return Object.freeze({ kind: "stdio", command });
+      const args = own(value, "args");
+      if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) {
+        throw unreadable("identity args must be an array of strings");
+      }
+      let derived: CommandIdentity;
+      try {
+        derived = commandIdentity(command, args as string[]);
+      } catch {
+        throw unreadable("identity command is not a basename, or its args cannot form an identity");
+      }
+      if (derived.command !== command) throw unreadable(`command must be a basename: ${repr(command)}`);
+      return derived;
     }
     throw unsupported(`stdio identity members ${repr(keys.sort())}`);
   }
   throw unsupported(`identity kind ${repr(kind)}`);
 }
 
-function identityFields(identity: Identity): Array<[string, string]> {
+function identityFields(identity: Identity): Array<[string, string | readonly string[]]> {
   if (identity.kind === "remote") return [["kind", "remote"], ["url", identity.url]];
   if ("package" in identity) return [["kind", "stdio"], ["package", identity.package]];
-  return [["kind", "stdio"], ["command", identity.command]];
+  return [["kind", "stdio"], ["command", identity.command], ["args", identity.args]];
 }
 
 /** RFC 8785 text of the identity (section 3.3). Compare identities by this string. */
 export function identityKey(identity: Identity): string {
-  const obj: Record<string, string> = Object.create(null) as Record<string, string>;
+  const obj: Record<string, string | readonly string[]> = Object.create(null) as Record<string, string | readonly string[]>;
   for (const [k, v] of identityFields(identity)) obj[k] = v;
   return canonicalize(obj);
 }
@@ -338,6 +435,35 @@ const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
  * value silently, so this scans the text, which JSON.parse has already
  * accepted, and compares decoded names (so "a" and "a" collide).
  */
+/**
+ * Section 4.3: every number in a lock file is an integer token. JSON.parse
+ * turns 1.0 and 1e0 into 1, so the raw text is checked. Returns the first
+ * offending token, or null. Outside strings, a number is the only token that
+ * starts with `-` or a digit.
+ */
+export function findNonIntegerNumber(text: string): string | null {
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      i = j + 1;
+      continue;
+    }
+    if (ch === "-" || (ch >= "0" && ch <= "9")) {
+      let j = i + 1;
+      while (j < text.length && /[0-9.eE+-]/.test(text[j] as string)) j++;
+      const token = text.slice(i, j);
+      if (!/^-?[0-9]+$/.test(token)) return token;
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
 export function findDuplicateKey(text: string): string | null {
   const stack: Array<{ keys: Set<string> | null; expectKey: boolean }> = [];
   let i = 0;
@@ -370,7 +496,8 @@ export function findDuplicateKey(text: string): string | null {
 
 /**
  * Parse lock file bytes: UTF-8 (a BOM is kept and so rejected), JSON, no repeated
- * member names. JSON.parse has no NaN or Infinity, so that rule needs no code.
+ * member names, integer number tokens only. JSON.parse has no NaN or Infinity,
+ * so that rule needs no code.
  */
 export function strictJson(data: Uint8Array, what: string): unknown {
   let text: string;
@@ -387,6 +514,8 @@ export function strictJson(data: Uint8Array, what: string): unknown {
   }
   const dup = findDuplicateKey(text);
   if (dup !== null) throw unreadable(`${what}: duplicate member name ${repr(dup)}`);
+  const num = findNonIntegerNumber(text);
+  if (num !== null) throw unreadable(`${what}: number ${num} is not an integer token`);
   return value;
 }
 
@@ -517,7 +646,8 @@ export function readLockDir(lockDir: string): Map<string, Buffer> {
   const ascii = names.map((b) => b.toString("latin1")).sort(compareCodePoints);
   const files = new Map<string, Buffer>();
   for (const name of ascii) {
-    if (!(name === MANIFEST || name === SIGNATURE || name === ALIASES || SHARD_NAME.test(name))) {
+    const shard = SHARD_NAME.exec(name);
+    if (!(name === MANIFEST || name === SIGNATURE || name === ALIASES || (shard !== null && (shard[1] as string).length <= SLUG_MAX))) {
       throw unreadable(`unexpected file ${repr(name)}`);
     }
     try {
@@ -569,9 +699,8 @@ function checkManifest(files: ReadonlyMap<string, Buffer>, config: ReaderConfig,
   }
   const sequence = own(manifest, "sequence");
   const listed = own(manifest, "files");
-  // JSON.parse gives 1.0 and 1 the same value, so a sequence written as 1.0
-  // passes here; lockref.py rejects it. Both reject a fraction.
-  if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0 || !isObject(listed)) {
+  // strictJson already refused 1.0 and 1e0 in the raw text (section 4.3).
+  if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0 || sequence > SEQUENCE_MAX || !isObject(listed)) {
     throw unreadable("MANIFEST.json sequence or files malformed");
   }
   const last = config.lastSequence ?? null;
@@ -863,7 +992,7 @@ export function formatLockFile(doc: WriterValue): Buffer {
 }
 
 function identityValue(identity: Identity): Ordered {
-  return ordered(identityFields(identity));
+  return ordered(identityFields(identity).map(([k, v]) => [k, typeof v === "string" ? v : [...v]] as const));
 }
 
 function attributesValue(a: Attributes): Ordered {

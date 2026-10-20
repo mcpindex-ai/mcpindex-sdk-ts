@@ -213,7 +213,11 @@ export class LockRefusal extends Error {
 }
 
 export interface CallGateOptions {
-  /** Refuse calls with `lock-stale` once the snapshot behind the decision is older than this. */
+  /**
+   * Section 9.8: refuse calls with `lock-stale` once the snapshot behind the
+   * decision is older than this. LockedTransport reloads first and only
+   * refuses when the reload fails.
+   */
   readonly maxStalenessMs?: number;
   readonly now?: () => number;
 }
@@ -255,9 +259,13 @@ export class CallGate {
     this.#unreachable = false;
   }
 
-  /** The server sent something that is not a listing; refuse every call until one completes. */
+  /** The latest listing failed; refuse every call with `unreachable` until one completes. */
   markUnreachable(): void {
     this.#unreachable = true;
+  }
+
+  get unreachable(): boolean {
+    return this.#unreachable;
   }
 
   isStale(): boolean {

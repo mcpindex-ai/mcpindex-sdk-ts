@@ -5,10 +5,33 @@
  *
  * Tenancy. The tenant comes from an AuthenticatedPrincipal the host passes in
  * after it has authenticated the caller. It is never read from a header or a
- * request body. Every statement runs in a transaction that first sets
- * `mcplock.tenant_id` with set_config(..., true), and row-level security on
- * both tables (FORCE, so the table owner is held to it too) limits every row
- * to that tenant. A superuser bypasses RLS; do not connect as one.
+ * request body. Row-level security on both tables (FORCE, so the table owner
+ * is held to it too) limits every row to one tenant. A superuser bypasses RLS;
+ * do not connect as one. There are two modes, chosen by the `tenancy` option
+ * and by which SQL the database administrator ran:
+ *
+ *   app-scoped (the default; MIGRATION_SQL). Every transaction first sets
+ *   `mcplock.tenant_id` with set_config(..., true), the parameterized form of
+ *   SET LOCAL, from the principal, and the policies compare rows against that
+ *   setting. This protects against query bugs in the store and the host: a
+ *   statement that forgets its tenant filter still sees one tenant. It does
+ *   not protect against a compromised application login. Any session may set
+ *   the setting, so whoever holds a shared mcplock_runtime login can read
+ *   every tenant, and whoever holds a shared mcplock_approver login can append
+ *   to every tenant.
+ *
+ *   role-bound (ROLE_BOUND_SQL after MIGRATION_SQL). The policies read the
+ *   tenant from mcplock.tenant_logins, an admin-owned table keyed by
+ *   session_user, through the SECURITY DEFINER function mcplock.login_tenant().
+ *   The session setting is ignored; the store does not set it. Each tenant
+ *   gets its own login roles (one in mcplock_runtime, one in mcplock_approver),
+ *   and the administrator maps each login to its tenant. session_user cannot
+ *   be changed by SET ROLE, and only a superuser can run SET SESSION
+ *   AUTHORIZATION, so a login reads and writes its own tenant and nothing
+ *   else. The store checks at the start of each transaction that the login is
+ *   mapped to the principal's tenant and fails otherwise. Running
+ *   MIGRATION_SQL again later leaves the role-bound policies in place, since
+ *   it only creates policies that are missing.
  *
  * Roles. ROLE_SQL creates two NOLOGIN roles: `mcplock_runtime` may only
  * SELECT, and is what hosts in lock mode connect as; `mcplock_approver` may
@@ -31,17 +54,14 @@
  * (the schema owner, a superuser) can rewrite a record and recompute every
  * hash after it; only a signed head gives tamper evidence against them.
  *
- * Known limit of the tenant setting: RLS keys on a session GUC, which any
- * session can set. A holder of a shared mcplock_runtime login can read any
- * tenant, and a holder of mcplock_approver can append to any tenant. Give
- * each tenant its own login roles, or bind tenants to session_user with a
- * mapping table, before sharing one database across mutually untrusted
- * tenants.
+ * Use role-bound before sharing one database across tenants that do not
+ * trust each other.
  *
- * Staleness. Each snapshot carries snapshotId (the head hash) and loadedAt.
- * Hosts pass maxStalenessMs to the CallGate (LockOptions in rawList.ts); calls
- * on a decision older than that are refused with `lock-stale` unless a reload
- * succeeds.
+ * Staleness (spec section 9.8). Each snapshot carries snapshotId (the head
+ * hash) and loadedAt. Hosts pass maxStalenessMs to the CallGate (LockOptions
+ * in rawList.ts); calls on a decision older than that are refused with
+ * `lock-stale` unless a reload succeeds, and a reload only shrinks the
+ * allow-list.
  *
  * SQL is parameterized throughout. A DSN never reaches a log or an error
  * message unredacted; see redactDsn.
@@ -154,6 +174,43 @@ GRANT SELECT, INSERT ON mcplock.records TO mcplock_approver;
 GRANT SELECT, INSERT, UPDATE ON mcplock.heads TO mcplock_approver;
 `;
 
+/**
+ * Role-bound tenancy. Run once by the schema owner after MIGRATION_SQL and
+ * ROLE_SQL, then map each login with
+ *   INSERT INTO mcplock.tenant_logins (login, tenant_id) VALUES ('<login>', '<tenant>');
+ * Neither mcplock role gets any privilege on the mapping table; the policies
+ * read it only through mcplock.login_tenant(). Replacing the policies inside
+ * one transaction leaves no moment with the old ones gone and the new ones
+ * missing, and FORCE RLS with no policy denies every row anyway.
+ */
+export const ROLE_BOUND_SQL = `
+BEGIN;
+CREATE TABLE IF NOT EXISTS mcplock.tenant_logins (
+  login     name PRIMARY KEY,
+  tenant_id text NOT NULL CHECK (tenant_id ~ '^[!-~]{1,128}$')
+);
+REVOKE ALL ON mcplock.tenant_logins FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION mcplock.login_tenant() RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, pg_temp
+  AS $$ SELECT tenant_id FROM mcplock.tenant_logins WHERE login = session_user $$;
+REVOKE ALL ON FUNCTION mcplock.login_tenant() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mcplock.login_tenant() TO mcplock_runtime, mcplock_approver;
+
+DROP POLICY IF EXISTS tenant_records ON mcplock.records;
+CREATE POLICY tenant_records ON mcplock.records
+  USING (tenant_id = mcplock.login_tenant())
+  WITH CHECK (tenant_id = mcplock.login_tenant());
+DROP POLICY IF EXISTS tenant_heads ON mcplock.heads;
+CREATE POLICY tenant_heads ON mcplock.heads
+  USING (tenant_id = mcplock.login_tenant())
+  WITH CHECK (tenant_id = mcplock.login_tenant());
+COMMIT;
+`;
+
+export type PgTenancy = "app-scoped" | "role-bound";
+
 /** Replace any password or userinfo in a connection string before it is shown. */
 export function redactDsn(dsn: string): string {
   return dsn
@@ -257,6 +314,13 @@ export interface PgLockStoreOptions {
   /** For messages only: replaced by its redacted form in any error text. */
   readonly dsn?: string;
   readonly now?: () => number;
+  /**
+   * "app-scoped" (default) sets the tenant setting from the principal in each
+   * transaction. "role-bound" needs ROLE_BOUND_SQL and one login per tenant;
+   * the store then only checks that its login is mapped to the principal's
+   * tenant. See the module comment for what each protects against.
+   */
+  readonly tenancy?: PgTenancy;
 }
 
 export class PgLockStore implements LockStore {
@@ -267,6 +331,7 @@ export class PgLockStore implements LockStore {
   readonly #verifier: HeadVerifier | undefined;
   readonly #dsn: string | undefined;
   readonly #now: () => number;
+  readonly #tenancy: PgTenancy;
   #lastSeq: number;
 
   constructor(options: PgLockStoreOptions) {
@@ -283,6 +348,9 @@ export class PgLockStore implements LockStore {
     this.#dsn = options.dsn;
     this.#now = options.now ?? Date.now;
     this.#lastSeq = options.lastSeq ?? 0;
+    const tenancy = options.tenancy ?? "app-scoped";
+    if (tenancy !== "app-scoped" && tenancy !== "role-bound") throw new Error(`unknown tenancy ${String(tenancy)}`);
+    this.#tenancy = tenancy;
   }
 
   async #tx<T>(mode: "read" | "write", fn: (c: PgClientLike) => Promise<T>): Promise<T> {
@@ -294,7 +362,13 @@ export class PgLockStore implements LockStore {
     }
     try {
       await client.query(mode === "read" ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN ISOLATION LEVEL SERIALIZABLE");
-      await client.query("SELECT set_config('mcplock.tenant_id', $1, true)", [this.#tenant]);
+      if (this.#tenancy === "app-scoped") {
+        await client.query("SELECT set_config('mcplock.tenant_id', $1, true)", [this.#tenant]);
+      } else {
+        const bound = (await client.query("SELECT mcplock.login_tenant() AS tenant")).rows[0]?.tenant;
+        if (bound === null || bound === undefined) throw new Error("role-bound tenancy: this login is not mapped to a tenant");
+        if (bound !== this.#tenant) throw new Error("role-bound tenancy: this login is mapped to a different tenant");
+      }
       const out = await fn(client);
       await client.query("COMMIT");
       client.release();

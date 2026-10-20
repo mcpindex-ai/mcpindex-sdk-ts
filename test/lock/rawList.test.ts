@@ -42,6 +42,7 @@ class FakeServer {
   instructions: string | undefined = INSTRUCTIONS;
   calls: Array<{ name: string; args: unknown }> = [];
   listRequests = 0;
+  listError = false;
   push: (line: string) => void = () => undefined;
 
   receive(text: string): void {
@@ -57,6 +58,10 @@ class FakeServer {
     }
     if (msg.method === "tools/list") {
       this.listRequests++;
+      if (this.listError) {
+        this.push(`{"jsonrpc":"2.0","id":${id},"error":{"code":-32603,"message":"listing failed"}}`);
+        return;
+      }
       const cursor = msg.params?.cursor;
       const index = cursor === undefined ? 0 : Number(String(cursor).slice(1));
       const page = this.pages[index] ?? [];
@@ -368,6 +373,33 @@ test("a stale snapshot is reloaded before a call; if the reload fails the call g
     await file.revoke({ identity: ID, tool: "search" });
     clock += 200;
     assert.equal((await refusal(r.client.callTool({ name: "search", arguments: {} }))).reason, "new-tool");
+    assert.equal(r.server.calls.length, 2);
+    await r.done();
+  } finally {
+    t.done();
+  }
+});
+
+test("a failed listing refuses every call with unreachable until a listing completes", async () => {
+  const t = tmpRoot();
+  try {
+    const store = await approvedStore(t.root, [SEARCH]);
+    let clock = 1_000;
+    const r = await rig(store, "guard", (s) => {
+      s.pages = [[SEARCH]];
+      s.instructions = undefined;
+    }, { maxStalenessMs: 100, now: () => clock });
+    await r.client.listTools();
+    await r.client.callTool({ name: "search", arguments: {} });
+    r.server.listError = true;
+    await assert.rejects(r.client.listTools());
+    assert.equal((await refusal(r.client.callTool({ name: "search", arguments: {} }))).reason, "unreachable");
+    // A stale reload does not bring back the allow-list of the earlier listing.
+    clock += 500;
+    assert.equal((await refusal(r.client.callTool({ name: "search", arguments: {} }))).reason, "unreachable");
+    r.server.listError = false;
+    await r.client.listTools();
+    await r.client.callTool({ name: "search", arguments: {} });
     assert.equal(r.server.calls.length, 2);
     await r.done();
   } finally {

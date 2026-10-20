@@ -27,7 +27,10 @@
  *
  * `notifications/tools/list_changed` is passed on and marks a listing as due.
  * Until the next listing completes the previous allow-list stays, so a name
- * the server just added is not callable. Server instructions arrive in the
+ * the server just added is not callable. A listing that fails (an error
+ * response, a result with no tools array, a page that cannot be requested, a
+ * page or tool limit exceeded) is different: every call is then refused with
+ * `unreachable` until a listing completes (section 9.5). Server instructions arrive in the
  * initialize result; they are checked there and stripped when the check says so.
  *
  * Lock mode has no auto-accept, first-use pin or re-pin, and this adapter
@@ -224,15 +227,15 @@ export class LockedTransport implements Transport {
   async #refresh(): Promise<void> {
     const previous = this.gate.decision;
     const tools = this.#lastTools;
-    if (previous === null || tools === null) return;
+    if (previous === null || tools === null || this.gate.unreachable) return;
     let snapshot: LockSnapshot;
     try {
       snapshot = await this.#store.loadSnapshot();
     } catch {
       return; // stays stale; calls get lock-stale
     }
-    // A listing that completed during the await is newer; never overwrite it.
-    if (this.gate.decision !== previous) return;
+    // A listing that completed or failed during the await is newer; never overwrite it.
+    if (this.gate.decision !== previous || this.gate.unreachable) return;
     const fresh = checkListing(snapshot.lock, this.#identity, { tools, instructions: this.#served }, this.#posture);
     const callable = new Set([...fresh.callable].filter((n) => previous.callable.has(n)));
     this.gate.record(Object.freeze({ ...fresh, callable }), snapshot);
@@ -308,6 +311,7 @@ export class LockedTransport implements Transport {
       await this.#onPage(collecting, message);
       return;
     }
+    if (pending === "tools/list") this.gate.markUnreachable(); // an error response: the listing failed
     this.#deliver(message, extra);
   }
 
@@ -337,7 +341,8 @@ export class LockedTransport implements Transport {
   async #onPage(collecting: Collecting, message: Rpc): Promise<void> {
     const error = own(message, "error");
     if (error !== undefined) {
-      // A failed page means no complete listing; the previous allow-list stays.
+      // A failed page means the listing failed; no earlier allow-list is used.
+      this.gate.markUnreachable();
       this.#deliver({ jsonrpc: "2.0", id: collecting.clientId, error });
       return;
     }
@@ -367,6 +372,7 @@ export class LockedTransport implements Transport {
         await this.#inner.send({ jsonrpc: "2.0", id: pid, method: "tools/list", params: { cursor } } as JSONRPCMessage);
       } catch (exc) {
         this.#pages.delete(idKey(pid) as string);
+        this.gate.markUnreachable();
         this.#deliver({
           jsonrpc: "2.0",
           id: collecting.clientId,

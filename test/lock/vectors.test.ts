@@ -1,6 +1,6 @@
 /**
- * mcp.lock draft 1 vectors, vendored from mcp-tool-pinning tag vectors-draft-1
- * (930026e) into test/fixtures/mcp-lock-vectors. SHA256SUMS is pinned below;
+ * mcp.lock draft 1 vectors, vendored from mcp-tool-pinning tag vectors-draft-1b
+ * (1f38955) into test/fixtures/mcp-lock-vectors. SHA256SUMS is pinned below;
  * every vendored file must match it, so the vectors cannot drift silently.
  *
  * Each group counts its cases and the last test checks the total, so a vector
@@ -31,6 +31,7 @@ import {
   remoteIdentity,
   shardFilename,
   slug,
+  strictJson,
   validateIdentity,
 } from "../../src/lock/lock.js";
 import type { Identity, Lock, Posture } from "../../src/lock/lock.js";
@@ -38,14 +39,14 @@ import { checkCall, checkListing } from "../../src/lock/check.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const VECTORS = join(ROOT, "test", "fixtures", "mcp-lock-vectors");
-const SUMS_SHA256 = "7467bd1668b3aab9480f2f7d85878690a76fdf5bbbdf1f04cf8d09c3f96aa0a0";
+const SUMS_SHA256 = "cd2447cb03db6e89875b74a2f9ef017b5f72f54b8544c0c0dc64c3e18f3880cc";
 
 const sha256 = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(VECTORS, rel), "utf8"));
 
 const counts = { tools: 0, raw: 0, identity: 0, lock: 0, contracts: 0 };
 
-test("SHA256SUMS is the pinned vectors-draft-1 file and covers every vendored file", () => {
+test("SHA256SUMS is the pinned vectors-draft-1b file and covers every vendored file", () => {
   const sums = readFileSync(join(VECTORS, "SHA256SUMS"));
   assert.equal(sha256(sums), SUMS_SHA256);
   const listed = new Map<string, string>();
@@ -97,11 +98,11 @@ test("digest/*.json: raw text through JSON.parse", () => {
 test("identity.json: normalization, key, h16, slug, filename", () => {
   const cases = readJson("identity.json") as Array<Record<string, unknown>>;
   for (const c of cases) {
-    const given = c.input as Record<string, string>;
+    const given = c.input as Record<string, unknown>;
     const make = (): Identity => {
       if ("url" in given) return remoteIdentity(given.url as string);
       if ("registry" in given) return packageIdentity(given.registry as string, given.name as string);
-      return commandIdentity(given.command as string);
+      return commandIdentity(given.command as string, given.args as string[]);
     };
     if (c.error === true) {
       assert.throws(make, Error, String(c.name));
@@ -117,7 +118,7 @@ test("identity.json: normalization, key, h16, slug, filename", () => {
     }
     counts.identity++;
   }
-  assert.equal(counts.identity, 18);
+  assert.equal(counts.identity, 29);
 });
 
 function materialize(name: string, tmp: string): string {
@@ -193,7 +194,7 @@ test("lock/*: every case gives the expected outcome", async () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-  assert.equal(counts.lock, 37);
+  assert.equal(counts.lock, 46);
 });
 
 test("contract files are RFC 8785 text of themselves", () => {
@@ -223,7 +224,12 @@ test("writer: re-formatting each well-formed vector shard, alias map and manifes
     }
     for (const [file, bytes] of files) {
       if (file === "MANIFEST.json") {
-        const doc = JSON.parse(bytes.toString("utf8")) as { sequence: number; files: Record<string, string> };
+        let doc: { sequence: number; files: Record<string, string> };
+        try {
+          doc = strictJson(bytes, file) as { sequence: number; files: Record<string, string> };
+        } catch {
+          continue; // a manifest the reader refuses (sequence 1.0, 1e0) has no writer form
+        }
         const listed = new Map<string, Buffer>();
         let complete = true;
         for (const f of Object.keys(doc.files)) {
@@ -270,6 +276,6 @@ function toWriter(v: unknown): W {
 }
 
 test("vector totals", () => {
-  // tools 42 + raw 45 + identity 18 + lock 37 = 142 decision vectors, plus contracts.
-  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock, 142);
+  // tools 42 + raw 45 + identity 29 + lock 46 = 162 decision vectors, plus contracts.
+  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock, 162);
 });

@@ -45,7 +45,7 @@ export interface ListingEvent extends EventBase {
   }>;
   readonly removed: readonly string[];
   readonly instructions: string | null;
-  /** The snapshot the decision used. An addition to the draft 1 field list. */
+  /** The snapshot the decision used (optional in the spec, always set here). */
   readonly snapshotId: string;
 }
 

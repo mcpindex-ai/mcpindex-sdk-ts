@@ -4,7 +4,8 @@
  * a postgres:16 container on 127.0.0.1). The test creates the schema, the two
  * roles and two login users with random passwords, then connects as those
  * users, so row-level security and grants are exercised as in production.
- * It refuses to run against anything but localhost.
+ * It refuses to run against anything but localhost. The role-bound test makes
+ * its own scratch database, since it replaces the policies, and drops it.
  */
 
 import assert from "node:assert/strict";
@@ -14,6 +15,7 @@ import test from "node:test";
 import {
   MIGRATION_SQL,
   PgLockStore,
+  ROLE_BOUND_SQL,
   ROLE_SQL,
   createPgPool,
   redactDsn,
@@ -236,5 +238,153 @@ test("Postgres store", { skip: skip ?? false }, async (t) => {
       c.release();
       await cleanup.end();
     }
+  }
+});
+
+test("role-bound tenancy: a login reads and writes only its mapped tenant", { skip: skip ?? false }, async (t) => {
+  const suffix = randomBytes(4).toString("hex");
+  const dbName = `mcplock_rb_${suffix}`;
+  const admin = (await createPgPool(URL_ENV as string)) as PgPoolLike & { end(): Promise<void> };
+  const run = async (pool: PgPoolLike, sql: string, values?: unknown[]): Promise<Array<Record<string, unknown>>> => {
+    const c = await pool.connect();
+    try {
+      return (await c.query(sql, values)).rows;
+    } finally {
+      c.release();
+    }
+  };
+  await run(admin, `CREATE DATABASE ${dbName}`);
+  const dbUrl = (user?: string, pass?: string): string => {
+    const u = new URL(URL_ENV as string);
+    u.pathname = `/${dbName}`;
+    if (user !== undefined) {
+      u.username = user;
+      u.password = pass ?? "";
+    }
+    return u.toString();
+  };
+  const pools: Array<PgPoolLike & { end(): Promise<void> }> = [];
+  const roles: string[] = [];
+  const db = (await createPgPool(dbUrl())) as PgPoolLike & { end(): Promise<void> };
+  pools.push(db);
+  const login = async (inRole: "mcplock_runtime" | "mcplock_approver", tenantId: string | null) => {
+    const name = `mcplock_rb_${inRole === "mcplock_runtime" ? "rt" : "ap"}_${randomBytes(4).toString("hex")}`;
+    const pass = randomBytes(12).toString("hex");
+    await run(admin, `CREATE ROLE ${name} LOGIN PASSWORD '${pass}' IN ROLE ${inRole}`);
+    roles.push(name);
+    if (tenantId !== null) await run(db, "INSERT INTO mcplock.tenant_logins (login, tenant_id) VALUES ($1, $2)", [name, tenantId]);
+    const pool = (await createPgPool(dbUrl(name, pass))) as PgPoolLike & { end(): Promise<void> };
+    pools.push(pool);
+    return pool;
+  };
+  try {
+    await run(db, MIGRATION_SQL);
+    await run(db, ROLE_SQL);
+    await run(db, ROLE_BOUND_SQL);
+    await run(db, MIGRATION_SQL); // re-running the base migration keeps the role-bound policies
+
+    const A = `t-a-${suffix}`;
+    const B = `t-b-${suffix}`;
+    const apA = await login("mcplock_approver", A);
+    const rtA = await login("mcplock_runtime", A);
+    const apB = await login("mcplock_approver", B);
+    const rtB = await login("mcplock_runtime", B);
+    const bound = (pool: PgPoolLike, tenantId: string) =>
+      new PgLockStore({ pool, principal: { tenantId, subject: "rb" }, tenancy: "role-bound" });
+
+    await t.test("each login works on its own tenant", async () => {
+      await bound(apA, A).approve({ identity: ID, tool: TOOL, via: "api" });
+      const snap = await bound(rtA, A).loadSnapshot();
+      assert.ok(!(snap.lock instanceof LockError));
+      assert.ok(checkListing(snap.lock, ID, { tools: [TOOL] }, "guard").callable.has("search"));
+      const other = await bound(rtB, B).loadSnapshot();
+      assert.equal((other.lock as Lock).shards.size, 0);
+    });
+
+    await t.test("setting another tenant's session value reads nothing of it", async () => {
+      for (const pool of [rtB, apB]) {
+        const c = await pool.connect();
+        try {
+          await c.query("BEGIN");
+          await c.query("SELECT set_config('mcplock.tenant_id', $1, true)", [A]);
+          const recs = (await c.query("SELECT count(*)::int AS n FROM mcplock.records")).rows;
+          const heads = (await c.query("SELECT count(*)::int AS n FROM mcplock.heads WHERE tenant_id = $1", [A])).rows;
+          assert.equal(recs[0]?.n, 0);
+          assert.equal(heads[0]?.n, 0);
+          await c.query("ROLLBACK");
+          // Session-level too, not only SET LOCAL.
+          await c.query("SET mcplock.tenant_id = '" + A + "'");
+          assert.equal((await c.query("SELECT count(*)::int AS n FROM mcplock.records")).rows[0]?.n, 0);
+          await c.query("RESET mcplock.tenant_id");
+        } finally {
+          c.release();
+        }
+      }
+      // An app-scoped store on B's login, told it is tenant A, sets the value and still sees nothing.
+      const spoof = await new PgLockStore({ pool: rtB, principal: { tenantId: A, subject: "x" } }).loadSnapshot();
+      assert.equal((spoof.lock as Lock).shards.size, 0);
+    });
+
+    await t.test("setting another tenant's session value writes nothing to it", async () => {
+      const c = await apB.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query("SELECT set_config('mcplock.tenant_id', $1, true)", [A]);
+        await assert.rejects(
+          c.query("INSERT INTO mcplock.heads (tenant_id, seq, head_hash) VALUES ($1, 0, 'x')", [A]),
+          /row-level security/,
+        );
+        await c.query("ROLLBACK");
+        await c.query("BEGIN");
+        await c.query("SELECT set_config('mcplock.tenant_id', $1, true)", [A]);
+        const updated = await c.query("UPDATE mcplock.heads SET signature = 'x' WHERE tenant_id = $1", [A]).then(
+          (r) => (r as unknown as { rowCount: number }).rowCount,
+          () => -1,
+        );
+        assert.ok(updated === 0 || updated === -1, "an UPDATE reached tenant A's head");
+        await c.query("ROLLBACK");
+      } finally {
+        c.release();
+      }
+      // An app-scoped store on B's approver login, told it is tenant A, cannot append to A.
+      await assert.rejects(
+        new PgLockStore({ pool: apB, principal: { tenantId: A, subject: "x" } }).approve({ identity: ID, tool: { ...TOOL, name: "evil" }, via: "api" }),
+      );
+      const a = await bound(rtA, A).loadSnapshot();
+      assert.deepEqual([...((a.lock as Lock).shards.values().next().value?.tools.keys() ?? [])], ["search"]);
+    });
+
+    await t.test("a role-bound store refuses a principal its login is not mapped to", async () => {
+      await assert.rejects(bound(rtB, A).loadSnapshot(), /mapped to a different tenant/);
+      await assert.rejects(bound(apB, A).approve({ identity: ID, tool: TOOL, via: "api" }), /mapped to a different tenant/);
+      const unmapped = await login("mcplock_runtime", null);
+      await assert.rejects(bound(unmapped, A).loadSnapshot(), /not mapped to a tenant/);
+      const c = await unmapped.connect();
+      try {
+        assert.equal((await c.query("SELECT count(*)::int AS n FROM mcplock.records")).rows[0]?.n, 0);
+        await assert.rejects(c.query("SELECT * FROM mcplock.tenant_logins"), /permission denied/);
+      } finally {
+        c.release();
+      }
+      const w = await apB.connect();
+      try {
+        await assert.rejects(w.query("INSERT INTO mcplock.tenant_logins (login, tenant_id) VALUES (session_user, $1)", [A]), /permission denied/);
+      } finally {
+        w.release();
+      }
+    });
+
+    await t.test("conformance suite in role-bound mode", async () => {
+      const results = await runLockStoreConformance(async () => {
+        const tenantId = `t-c-${randomBytes(6).toString("hex")}`;
+        return bound(await login("mcplock_approver", tenantId), tenantId);
+      });
+      for (const r of results) assert.ok(r.ok, `${r.name}: ${r.error}`);
+    });
+  } finally {
+    for (const p of pools.reverse()) await p.end();
+    await run(admin, `DROP DATABASE IF EXISTS ${dbName}`);
+    for (const r of roles) await run(admin, `DROP ROLE IF EXISTS ${r}`);
+    await admin.end();
   }
 });
