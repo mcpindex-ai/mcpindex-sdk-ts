@@ -2,8 +2,11 @@
   {
     "name": "listing-number-id",
     "note": "Answers an in-flight tools/list.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -25,8 +28,11 @@
   {
     "name": "listing-string-id",
     "note": "String ids match equal strings.",
-    "inflight": [
-      "a"
+    "pending": [
+      {
+        "id": "a",
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -48,8 +54,11 @@
   {
     "name": "listing-error",
     "note": "An error answer to an in-flight tools/list ends that listing.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -64,8 +73,11 @@
   {
     "name": "string-is-not-number",
     "note": "\"1\" does not answer request 1.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -87,8 +99,11 @@
   {
     "name": "number-is-not-string",
     "note": "1 does not answer request \"1\".",
-    "inflight": [
-      "1"
+    "pending": [
+      {
+        "id": "1",
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -110,8 +125,11 @@
   {
     "name": "true-is-not-one",
     "note": "true does not answer request 1.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -133,8 +151,11 @@
   {
     "name": "null-id",
     "note": "A null id answers nothing, even if the host sent a request with a null id.",
-    "inflight": [
-      null
+    "pending": [
+      {
+        "id": null,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -156,8 +177,11 @@
   {
     "name": "no-id",
     "note": "A result without an id.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -178,8 +202,11 @@
   {
     "name": "unmatched-id",
     "note": "No tools/list with this id is in flight.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -201,8 +228,11 @@
   {
     "name": "method-and-result",
     "note": "A frame with both method and result is not a response.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -225,8 +255,11 @@
   {
     "name": "method-null-and-result",
     "note": "A method member, even null, makes it not a response.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -249,10 +282,16 @@
   {
     "name": "inflight-before-handshake",
     "note": "initialize \"1\" and tools/list 1 in flight; 1 is the listing.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": "1",
+        "method": "initialize"
+      },
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
-    "handshake": "1",
     "frame": {
       "jsonrpc": "2.0",
       "id": 1,
@@ -273,10 +312,16 @@
   {
     "name": "same-id-both",
     "note": "One id on both: the in-flight tools/list wins.",
-    "inflight": [
-      7
+    "pending": [
+      {
+        "id": 7,
+        "method": "initialize"
+      },
+      {
+        "id": 7,
+        "method": "tools/list"
+      }
     ],
-    "handshake": 7,
     "frame": {
       "jsonrpc": "2.0",
       "id": 7,
@@ -297,8 +342,12 @@
   {
     "name": "handshake-exact",
     "note": "Answers the in-flight initialize.",
-    "inflight": [],
-    "handshake": 0,
+    "pending": [
+      {
+        "id": 0,
+        "method": "initialize"
+      }
+    ],
     "frame": {
       "jsonrpc": "2.0",
       "id": 0,
@@ -312,8 +361,12 @@
   {
     "name": "handshake-with-tools",
     "note": "An initialize answer that carries tools.",
-    "inflight": [],
-    "handshake": 0,
+    "pending": [
+      {
+        "id": 0,
+        "method": "initialize"
+      }
+    ],
     "frame": {
       "jsonrpc": "2.0",
       "id": 0,
@@ -335,8 +388,12 @@
   {
     "name": "handshake-loose",
     "note": "0 does not answer initialize \"0\"; it carries instructions.",
-    "inflight": [],
-    "handshake": "0",
+    "pending": [
+      {
+        "id": "0",
+        "method": "initialize"
+      }
+    ],
     "frame": {
       "jsonrpc": "2.0",
       "id": 0,
@@ -350,8 +407,12 @@
   {
     "name": "false-is-not-zero",
     "note": "false does not answer initialize 0.",
-    "inflight": [],
-    "handshake": 0,
+    "pending": [
+      {
+        "id": 0,
+        "method": "initialize"
+      }
+    ],
     "frame": {
       "jsonrpc": "2.0",
       "id": false,
@@ -363,12 +424,113 @@
     "expect": "drop"
   },
   {
+    "name": "discover-handshake",
+    "note": "Answers the in-flight server/discover; its instructions are checked.",
+    "pending": [
+      {
+        "id": 3,
+        "method": "server/discover"
+      }
+    ],
+    "frame": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "supportedVersions": [
+          "2026-06-30"
+        ],
+        "instructions": "x"
+      }
+    },
+    "expect": "handshake"
+  },
+  {
+    "name": "discover-with-tools",
+    "note": "A server/discover answer that carries tools.",
+    "pending": [
+      {
+        "id": 3,
+        "method": "server/discover"
+      }
+    ],
+    "frame": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "supportedVersions": [
+          "2026-06-30"
+        ],
+        "instructions": "x",
+        "tools": [
+          {
+            "name": "evil",
+            "description": "x",
+            "inputSchema": {
+              "type": "object"
+            }
+          }
+        ]
+      }
+    },
+    "expect": "drop"
+  },
+  {
+    "name": "discover-loose",
+    "note": "\"3\" does not answer server/discover 3; it carries instructions.",
+    "pending": [
+      {
+        "id": 3,
+        "method": "server/discover"
+      }
+    ],
+    "frame": {
+      "jsonrpc": "2.0",
+      "id": "3",
+      "result": {
+        "supportedVersions": [
+          "2026-06-30"
+        ],
+        "instructions": "x"
+      }
+    },
+    "expect": "drop"
+  },
+  {
+    "name": "other-request-instructions",
+    "note": "Only initialize and server/discover answers may carry instructions.",
+    "pending": [
+      {
+        "id": 4,
+        "method": "resources/list"
+      }
+    ],
+    "frame": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "resources": [],
+        "instructions": "x"
+      }
+    },
+    "expect": "drop"
+  },
+  {
     "name": "other-response",
     "note": "A response to some other request is relayed.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      },
+      {
+        "id": 0,
+        "method": "initialize"
+      },
+      {
+        "id": 5,
+        "method": "tools/call"
+      }
     ],
-    "handshake": 0,
     "frame": {
       "jsonrpc": "2.0",
       "id": 5,
@@ -381,8 +543,11 @@
   {
     "name": "notification",
     "note": "A notification is relayed.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -393,8 +558,11 @@
   {
     "name": "server-request",
     "note": "A request from the server is relayed.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": {
       "jsonrpc": "2.0",
@@ -407,8 +575,11 @@
   {
     "name": "batch",
     "note": "A frame that is not an object.",
-    "inflight": [
-      1
+    "pending": [
+      {
+        "id": 1,
+        "method": "tools/list"
+      }
     ],
     "frame": [
       {

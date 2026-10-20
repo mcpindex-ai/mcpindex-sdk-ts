@@ -13,5 +13,34 @@
   "calls": {
     "search": "allow"
   },
-  "meta": {}
+  "meta": {},
+  "event": {
+    "schema": "mcpindex.lock.event/1",
+    "type": "listing",
+    "host": "vectors",
+    "server": {
+      "h16": "022711de5f88d01f",
+      "slug": "mcp-example-com-v1-mcp"
+    },
+    "posture": "monitor",
+    "lockError": null,
+    "counts": {
+      "served": 1,
+      "shown": 1,
+      "withheld": 0,
+      "removed": 0
+    },
+    "tools": [
+      {
+        "name": "search",
+        "served": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "approved": null,
+        "decision": "shown",
+        "reason": "unlocked-server",
+        "meta": null
+      }
+    ],
+    "removed": [],
+    "instructions": "instructions-changed"
+  }
 }

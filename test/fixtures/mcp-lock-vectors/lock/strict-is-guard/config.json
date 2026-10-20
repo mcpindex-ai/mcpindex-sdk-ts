@@ -1,3 +1,4 @@
 {
-  "posture": "strict"
+  "posture": "strict",
+  "host": "vectors"
 }

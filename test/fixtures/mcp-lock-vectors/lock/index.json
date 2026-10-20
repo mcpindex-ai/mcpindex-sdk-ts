@@ -56,6 +56,8 @@
   "session-listing-failed": "A failed listing refuses calls with unreachable until a listing completes.",
   "session-stale-reload-shrinks": "Default 60 s staleness: a reload withholds a revoked tool and never restores one.",
   "session-stale-reload-fails": "A failed reload is lock-stale; a whole-lock failure on a listing is reported before lock-stale.",
+  "session-dropped-answer": "A dropped frame that answers a pending request ends it with an error; for the listing's tools/list the listing fails.",
+  "session-lock-broken-listing-fails": "Call reason order: a whole-lock failure on the latest completed listing comes before unreachable from a later failed listing.",
   "call-before-listing": "Calls before any listing are refused.",
   "calls": "Calls to an approved, a withheld and an unlisted tool."
 }

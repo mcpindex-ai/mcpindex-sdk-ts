@@ -18,5 +18,42 @@
       "relay": false,
       "flag": "meta-changed"
     }
+  },
+  "event": {
+    "schema": "mcpindex.lock.event/1",
+    "type": "listing",
+    "host": "vectors",
+    "server": {
+      "h16": "022711de5f88d01f",
+      "slug": "mcp-example-com-v1-mcp"
+    },
+    "posture": "guard",
+    "lockError": null,
+    "counts": {
+      "served": 2,
+      "shown": 2,
+      "withheld": 0,
+      "removed": 0
+    },
+    "tools": [
+      {
+        "name": "search",
+        "served": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "approved": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "decision": "shown",
+        "reason": null,
+        "meta": "meta-changed"
+      },
+      {
+        "name": "fetch",
+        "served": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+        "approved": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+        "decision": "shown",
+        "reason": null,
+        "meta": null
+      }
+    ],
+    "removed": [],
+    "instructions": null
   }
 }

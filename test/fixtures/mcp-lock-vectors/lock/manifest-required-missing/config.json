@@ -1,4 +1,5 @@
 {
   "posture": "guard",
+  "host": "vectors",
   "requireManifest": true
 }

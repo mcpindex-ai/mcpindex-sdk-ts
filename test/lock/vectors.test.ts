@@ -1,12 +1,15 @@
 /**
- * mcp.lock draft 1c vectors, vendored from mcp-tool-pinning tag vectors-draft-1c
- * (eccdc4c) into test/fixtures/mcp-lock-vectors with `git archive`. SHA256SUMS
- * is pinned below; every vendored file must match it, so the vectors cannot
- * drift silently.
+ * mcp.lock draft 1 revision 1d vectors, vendored from mcp-tool-pinning tag
+ * vectors-draft-1d (b5e84c8) into test/fixtures/mcp-lock-vectors with
+ * `git archive vectors-draft-1d vectors`. SHA256SUMS is pinned below; every
+ * vendored file must match it, so the vectors cannot drift silently.
  *
- * Lock cases load through FileLockStore with the case's host config. Session
- * cases (session.json) drive a LockedTransport over a scripted server, so the
- * adapter itself is what answers each call. Frame cases run classifyFrame.
+ * Lock cases load through FileLockStore with the case's host config, and their
+ * listing event is compared member by member except id, time and snapshotId.
+ * Session cases (session.json) drive a LockedTransport over a scripted server,
+ * so the adapter itself is what answers each call and each server frame.
+ * Frame cases run classifyFrame with the pending requests' methods. Host
+ * config cases run hostPathProblem and the FileLockStore constructor.
  *
  * Each group counts its cases and the last test checks the total, so a vector
  * that is skipped by mistake fails the run.
@@ -41,23 +44,24 @@ import {
 } from "../../src/lock/lock.js";
 import type { Identity, Lock, Posture } from "../../src/lock/lock.js";
 import { checkCall, checkListing } from "../../src/lock/check.js";
-import { LockedTransport, classifyFrame, idMatches } from "../../src/lock/rawList.js";
+import { HANDSHAKE_METHODS, LockedTransport, classifyFrame, idMatches } from "../../src/lock/rawList.js";
 import type { FrameKind } from "../../src/lock/rawList.js";
-import { FileLockStore } from "../../src/lock/store.js";
+import { listingEvent } from "../../src/lock/events.js";
+import { FileLockStore, HostConfigError, hostPathProblem } from "../../src/lock/store.js";
 import type { SequenceStore } from "../../src/lock/store.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const VECTORS = join(ROOT, "test", "fixtures", "mcp-lock-vectors");
-const SUMS_SHA256 = "5ae51a9a697ef55c7d2fd71e4a00734e2b50f57324d3493b222dde1cb0447710";
+const SUMS_SHA256 = "f1ad0c1a09074f0b2e33375e61ebac23b6f3d4f3ebf06f33f80a6702cd6ec371";
 
 const sha256 = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(VECTORS, rel), "utf8"));
 
-const counts = { tools: 0, raw: 0, identity: 0, lock: 0, sessions: 0, frames: 0, contracts: 0 };
+const counts = { tools: 0, raw: 0, identity: 0, lock: 0, sessions: 0, frames: 0, host: 0, contracts: 0 };
 
-test("SHA256SUMS is the pinned vectors-draft-1c file and covers every vendored file", () => {
+test("SHA256SUMS is the pinned vectors-draft-1d file and covers every vendored file", () => {
   const sums = readFileSync(join(VECTORS, "SHA256SUMS"));
   assert.equal(sha256(sums), SUMS_SHA256);
   const listed = new Map<string, string>();
@@ -155,6 +159,7 @@ function materialize(name: string, tmp: string): string {
 
 interface CaseConfig {
   posture: Posture;
+  host: string;
   requireManifest?: boolean;
   signer?: { issuer: string; san: string };
   sequenceStore?: boolean;
@@ -189,7 +194,8 @@ function storeFor(root: string, config: CaseConfig, clock: () => number): FileLo
 async function runCase(root: string): Promise<Record<string, unknown>> {
   const config = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as CaseConfig;
   const identity = JSON.parse(readFileSync(join(root, "server.json"), "utf8")) as Identity;
-  const lock: Lock | LockError = (await storeFor(root, config, () => 0).loadSnapshot()).lock;
+  const snapshot = await storeFor(root, config, () => 0).loadSnapshot();
+  const lock: Lock | LockError = snapshot.lock;
   const expected = JSON.parse(readFileSync(join(root, "expected.json"), "utf8")) as { calls: Record<string, string> };
   const listingPath = join(root, "listing.json");
   const decision = existsSync(listingPath)
@@ -207,7 +213,14 @@ async function runCase(root: string): Promise<Record<string, unknown>> {
     stripInstructions: decision ? decision.stripInstructions : false,
     calls,
     meta: decision ? Object.fromEntries([...decision.meta].map(([k, v]) => [k, { relay: v.relay, flag: v.flag }])) : {},
+    event: decision ? comparable(listingEvent({ host: config.host, identity }, decision, snapshot.snapshotId)) : null,
   };
+}
+
+/** A listing event without the members the vectors leave out: id, time and snapshotId. */
+function comparable(event: object): Record<string, unknown> {
+  const { id: _id, time: _time, snapshotId: _snapshot, ...rest } = event as Record<string, unknown>;
+  return JSON.parse(JSON.stringify(rest)) as Record<string, unknown>;
 }
 
 /** A server that answers only when a session step tells it to. */
@@ -226,7 +239,19 @@ class ScriptedServer implements Transport {
   }
 }
 
-type Step = { op: string; listing?: string; advance?: number; path?: string; text?: string; tool?: string; expect?: string };
+type Step = {
+  op: string;
+  id?: string | number;
+  method?: string;
+  frame?: unknown;
+  errorTo?: string | number | null;
+  listing?: string;
+  advance?: number;
+  path?: string;
+  text?: string;
+  tool?: string;
+  expect?: string;
+};
 
 /** Run session.json against a LockedTransport. Returns every call whose verdict differs. */
 async function runSession(root: string): Promise<string[]> {
@@ -244,21 +269,45 @@ async function runSession(root: string): Promise<string[]> {
   });
   const delivered = new Map<unknown, Record<string, unknown>>();
   const waiters = new Map<unknown, () => void>();
+  const log: Array<Record<string, unknown>> = [];
+  const errors: Error[] = [];
   locked.onmessage = (m) => {
     const msg = m as unknown as Record<string, unknown>;
+    log.push(msg);
     delivered.set(msg.id, msg);
     waiters.get(msg.id)?.();
   };
+  locked.onerror = (e) => errors.push(e);
   const answered = (id: unknown): Promise<void> =>
     delivered.has(id) ? Promise.resolve() : new Promise<void>((res) => waiters.set(id, res));
   await locked.start();
   let seq = 0;
-  let listId: string | null = null;
+  let listId: string | number | null = null;
   const mismatches: string[] = [];
   for (const [index, step] of steps.entries()) {
     if (step.op === "list-start") {
-      listId = `list-${++seq}`;
+      listId = step.id ?? `list-${++seq}`;
       await locked.send({ jsonrpc: "2.0", id: listId, method: "tools/list" } as JSONRPCMessage);
+    } else if (step.op === "request") {
+      await locked.send({ jsonrpc: "2.0", id: step.id as string | number, method: step.method as string } as JSONRPCMessage);
+    } else if (step.op === "frame") {
+      // What the client sees for this frame: nothing, the frame itself, or an error under errorTo.
+      const before = log.length;
+      const errorsBefore = errors.length;
+      server.frame(step.frame as Record<string, unknown>);
+      await new Promise((res) => setImmediate(res));
+      const out = log.slice(before);
+      const dropped = errors.length > errorsBefore && out.every((m) => m.error !== undefined);
+      // A relayed frame reaches the client as sent; a handshake answer may lose its instructions.
+      const passed = out.length === 1 && out[0]?.error === undefined;
+      const got = dropped ? "drop" : passed && JSON.stringify(out[0]) === JSON.stringify(step.frame) ? "relay" : passed ? "handshake" : "?";
+      const want = step.expect === "handshake" && got === "relay" ? "relay" : step.expect;
+      if (got !== want) mismatches.push(`step ${index}: frame gave ${got}, expected ${String(step.expect)}`);
+      const errorTo = out.filter((m) => m.error !== undefined).map((m) => m.id);
+      const wantErrorTo = step.errorTo === null || step.errorTo === undefined ? [] : [step.errorTo];
+      if (JSON.stringify(errorTo) !== JSON.stringify(wantErrorTo)) {
+        mismatches.push(`step ${index}: frame answered ${JSON.stringify(errorTo)}, expected ${JSON.stringify(wantErrorTo)}`);
+      }
     } else if (step.op === "list-complete" || step.op === "list-fail") {
       assert.ok(listId !== null, `step ${index}: no listing started`);
       const id = listId;
@@ -315,23 +364,74 @@ test("lock/*: every case gives the expected outcome", async () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-  assert.equal(counts.lock, 59);
-  assert.equal(counts.sessions, 4);
+  assert.equal(counts.lock, 61);
+  assert.equal(counts.sessions, 6);
 });
 
 test("frames.json: what the adapter does with each server frame (section 9.2.2)", () => {
-  const cases = readJson("frames.json") as Array<{ name: string; inflight: unknown[]; handshake?: unknown; frame: unknown; expect: FrameKind }>;
+  const cases = readJson("frames.json") as Array<{
+    name: string;
+    pending: Array<{ id: unknown; method: string }>;
+    frame: unknown;
+    expect: FrameKind;
+  }>;
   for (const c of cases) {
-    const handshake = c.handshake === undefined ? [] : [c.handshake];
+    const inflight = c.pending.filter((p) => p.method === "tools/list").map((p) => p.id);
+    const handshake = c.pending.filter((p) => HANDSHAKE_METHODS.includes(p.method)).map((p) => p.id);
     const got = classifyFrame(
       c.frame,
-      (id) => idMatches(id, c.inflight),
+      (id) => idMatches(id, inflight),
       (id) => idMatches(id, handshake),
     );
     assert.equal(got, c.expect, c.name);
     counts.frames++;
   }
-  assert.equal(counts.frames, 21);
+  assert.equal(counts.frames, 25);
+});
+
+test("host-config.json: sequencePath and trustedRoot outside the lock's repository (section 8.2)", () => {
+  const cases = readJson("host-config.json") as Array<{
+    name: string;
+    dirs?: string[];
+    files?: string[];
+    symlinks?: Array<{ path: string; target: string }>;
+    lockRoot: string;
+    sequencePath?: string;
+    trustedRoot?: string;
+    expect: "accept" | "refuse";
+  }>;
+  for (const c of cases) {
+    const base = mkdtempSync(join(tmpdir(), "mcplock-host-"));
+    try {
+      for (const d of c.dirs ?? []) mkdirSync(join(base, d), { recursive: true });
+      for (const f of c.files ?? []) {
+        mkdirSync(dirname(join(base, f)), { recursive: true });
+        writeFileSync(join(base, f), "");
+      }
+      for (const l of c.symlinks ?? []) {
+        mkdirSync(dirname(join(base, l.path)), { recursive: true });
+        symlinkSync(l.target, join(base, l.path));
+      }
+      const root = join(base, c.lockRoot);
+      const sequencePath = c.sequencePath === undefined ? undefined : join(base, c.sequencePath);
+      const trustedRootPath = c.trustedRoot === undefined ? undefined : join(base, c.trustedRoot);
+      const problem = hostPathProblem(root, { sequencePath, trustedRootPath });
+      assert.equal(problem === null ? "accept" : "refuse", c.expect, `${c.name}: ${String(problem)}`);
+      // The file store applies the same rule when it is constructed.
+      const make = (): FileLockStore =>
+        new FileLockStore({
+          root,
+          ...(sequencePath !== undefined ? { sequencePath } : {}),
+          ...(trustedRootPath !== undefined ? { trustedRootPath } : {}),
+        });
+      if (c.expect === "refuse") assert.throws(make, HostConfigError, c.name);
+      else make();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+    counts.host++;
+  }
+  assert.equal(counts.host, 9);
 });
 
 test("contract files are RFC 8785 text of themselves", () => {
@@ -413,7 +513,7 @@ function toWriter(v: unknown): W {
 }
 
 test("vector totals", () => {
-  // tools 42 + raw 48 + identity 29 + lock 59 + frames 21 = 199 vectors (4 of the
-  // lock cases also run a session), plus contracts.
-  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock + counts.frames, 199);
+  // tools 42 + raw 48 + identity 29 + lock 61 + frames 25 + host 9 = 214 vectors
+  // (6 of the lock cases also run a session), plus contracts.
+  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock + counts.frames + counts.host, 214);
 });

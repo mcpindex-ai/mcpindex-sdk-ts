@@ -1,3 +1,4 @@
 {
-  "posture": "monitor"
+  "posture": "monitor",
+  "host": "vectors"
 }

@@ -1,0 +1,122 @@
+[
+  {
+    "name": "outside-repository",
+    "note": "Both paths outside the git repository that holds the lock.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock",
+      "state"
+    ],
+    "lockRoot": "repo",
+    "sequencePath": "state/sequence",
+    "trustedRoot": "state/trusted_root.json",
+    "expect": "accept"
+  },
+  {
+    "name": "not-yet-created",
+    "note": "A sequence file that does not exist yet, in a directory that does not either.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock"
+    ],
+    "lockRoot": "repo",
+    "sequencePath": "state/new/sequence",
+    "expect": "accept"
+  },
+  {
+    "name": "sequence-in-lock-root",
+    "note": "No repository: the lock root is the boundary.",
+    "dirs": [
+      "lockroot/.mcp/lock"
+    ],
+    "lockRoot": "lockroot",
+    "sequencePath": "lockroot/state/sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "no-repository-sibling",
+    "note": "No repository: a sibling of the lock root is outside it.",
+    "dirs": [
+      "work/lock/.mcp/lock",
+      "work/state"
+    ],
+    "lockRoot": "work/lock",
+    "sequencePath": "work/state/sequence",
+    "expect": "accept"
+  },
+  {
+    "name": "sequence-in-repository",
+    "note": "Lock root below the git top-level; the sequence file elsewhere in the repository.",
+    "dirs": [
+      "repo/.git",
+      "repo/sub/.mcp/lock",
+      "repo/state"
+    ],
+    "lockRoot": "repo/sub",
+    "sequencePath": "repo/state/sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "trusted-root-in-repository",
+    "note": "The trust root inside the repository, outside the lock root.",
+    "dirs": [
+      "repo/.git",
+      "repo/sub/.mcp/lock",
+      "state"
+    ],
+    "lockRoot": "repo/sub",
+    "sequencePath": "state/sequence",
+    "trustedRoot": "repo/trusted_root.json",
+    "expect": "refuse"
+  },
+  {
+    "name": "git-file",
+    "note": "A .git file, as in a git worktree, marks the repository too.",
+    "dirs": [
+      "repo/sub/.mcp/lock",
+      "repo/state"
+    ],
+    "files": [
+      "repo/.git"
+    ],
+    "lockRoot": "repo/sub",
+    "sequencePath": "repo/state/sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "symlink-into-repository",
+    "note": "A path outside the repository that resolves into it.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock",
+      "repo/state"
+    ],
+    "lockRoot": "repo",
+    "symlinks": [
+      {
+        "path": "link",
+        "target": "repo/state"
+      }
+    ],
+    "sequencePath": "link/sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "symlink-out-of-repository",
+    "note": "A path inside the repository that resolves outside it.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock",
+      "state"
+    ],
+    "lockRoot": "repo",
+    "symlinks": [
+      {
+        "path": "repo/out",
+        "target": "../state"
+      }
+    ],
+    "trustedRoot": "repo/out/trusted_root.json",
+    "expect": "refuse"
+  }
+]

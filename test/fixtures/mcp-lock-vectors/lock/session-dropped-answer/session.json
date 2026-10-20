@@ -1,0 +1,144 @@
+{
+  "steps": [
+    {
+      "op": "list-start",
+      "id": 1
+    },
+    {
+      "op": "frame",
+      "frame": {
+        "jsonrpc": "2.0",
+        "result": {
+          "tools": [
+            {
+              "name": "evil",
+              "description": "x",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "id": "1"
+      },
+      "expect": "drop",
+      "errorTo": null
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "frame",
+      "frame": {
+        "jsonrpc": "2.0",
+        "result": {
+          "tools": [
+            {
+              "name": "evil",
+              "description": "x",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "id": 1
+      },
+      "expect": "drop",
+      "errorTo": null
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "list-start",
+      "id": "L2"
+    },
+    {
+      "op": "frame",
+      "frame": {
+        "jsonrpc": "2.0",
+        "result": {
+          "tools": [
+            {
+              "name": "evil",
+              "description": "x",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "id": "L2",
+        "method": "x"
+      },
+      "expect": "drop",
+      "errorTo": "L2"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "request",
+      "id": 7,
+      "method": "resources/list"
+    },
+    {
+      "op": "frame",
+      "frame": {
+        "jsonrpc": "2.0",
+        "result": {
+          "tools": [
+            {
+              "name": "evil",
+              "description": "x",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        "id": 7
+      },
+      "expect": "drop",
+      "errorTo": 7
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "call",
+      "tool": "evil",
+      "expect": "not-listed"
+    }
+  ]
+}

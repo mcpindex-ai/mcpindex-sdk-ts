@@ -10,5 +10,6 @@
     "search": "no-listing",
     "fetch": "no-listing"
   },
-  "meta": {}
+  "meta": {},
+  "event": null
 }

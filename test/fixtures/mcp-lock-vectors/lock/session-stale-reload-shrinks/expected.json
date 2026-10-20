@@ -7,5 +7,6 @@
   "instructions": null,
   "stripInstructions": false,
   "calls": {},
-  "meta": {}
+  "meta": {},
+  "event": null
 }
