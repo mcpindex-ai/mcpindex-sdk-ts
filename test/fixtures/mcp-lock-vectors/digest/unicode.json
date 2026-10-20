@@ -1,0 +1,15 @@
+{
+  "name": "summarize",
+  "description": "Résumé € 😀  ",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  }
+}

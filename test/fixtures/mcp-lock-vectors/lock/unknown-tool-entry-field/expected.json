@@ -1,0 +1,16 @@
+{
+  "lockError": "lock-unsupported",
+  "shown": [],
+  "withheld": {
+    "search": "lock-unsupported",
+    "fetch": "lock-unsupported"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": true,
+  "calls": {
+    "search": "lock-unsupported",
+    "fetch": "lock-unsupported"
+  }
+}

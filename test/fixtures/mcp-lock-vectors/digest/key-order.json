@@ -1,0 +1,15 @@
+{
+  "inputSchema": {
+    "required": [
+      "text"
+    ],
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "description": "Summarize text.",
+  "name": "summarize"
+}

@@ -1,0 +1,182 @@
+{
+  "base": {
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "note": "Reference tool; most other cases differ from it in one member."
+  },
+  "key-order": {
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "note": "Member order does not matter."
+  },
+  "top-level-meta-dropped": {
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "note": "Top-level _meta is removed before hashing."
+  },
+  "nested-meta-kept": {
+    "expected": "sha256:6bdce6744962465f21b57f0715cfabc6021e61334fd19689754832b47d8814d3",
+    "note": "_meta below the top level is covered."
+  },
+  "unknown-member-covered": {
+    "expected": "sha256:3efb63bf335076c7cf33486c3708a767b5dca743fe56ca9edddf6311037c5508",
+    "note": "An unknown top-level member is covered."
+  },
+  "unicode": {
+    "expected": "sha256:ee867900a482aed9424865726789a03f414ad6d82875cc32b6045e9ed67d7842",
+    "note": "Non-ASCII text, a surrogate pair and U+2028 are hashed as UTF-8."
+  },
+  "number-1.0-equals-1": {
+    "expected": "sha256:c4a0090ef35cbc2eea2e059a418e82e7d2c2c671e3761f1afa6a3ff5d0c3feae",
+    "note": "1.0 and 1 are the same number."
+  },
+  "number-1": {
+    "expected": "sha256:c4a0090ef35cbc2eea2e059a418e82e7d2c2c671e3761f1afa6a3ff5d0c3feae",
+    "note": "Integer form of the previous case."
+  },
+  "number-formats": {
+    "expected": "sha256:bf33aa6e5ae058c2a4a56b9ea9170a7aed8c73979a79fe3ee11f8e5efd0319cc",
+    "note": "RFC 8785 number serialization: 0.1, -0.0, 1e-07, large integer, 1e15."
+  },
+  "annotations-and-title": {
+    "expected": "sha256:be7364b242083a11e0b7ad148f96976f007ae96ac99edebe5eba43420f60aed5",
+    "note": "title and annotations are covered."
+  },
+  "number-2^53-minus-1-has-digest": {
+    "expected": "sha256:1807a9b261ede87238f4c1c46974b2d62cf8f95f1f4efbf5271d37139ab38d42",
+    "note": "Largest magnitude that gets a digest."
+  },
+  "number-2^53-no-digest": {
+    "expected": null,
+    "note": "Magnitude 2^53 gets no digest."
+  },
+  "number-2^53-plus-1-no-digest": {
+    "expected": null,
+    "note": "JSON.parse rounds this to 2^53; both sides give no digest."
+  },
+  "number-negative-2^53-no-digest": {
+    "expected": null,
+    "note": "The limit applies to magnitude."
+  },
+  "number-2^64-no-digest": {
+    "expected": null,
+    "note": "Large integer, no digest."
+  },
+  "number-1e20-exponent-no-digest": {
+    "expected": null,
+    "note": "Exponent form above the limit, no digest."
+  },
+  "unknown-top-level-member-object": {
+    "expected": "sha256:a2aff4c34aba8a5016ba8a698a77a4e4954eb9b45d07aa4837387057ee0946c2",
+    "note": "An unknown top-level member with an object value is covered."
+  },
+  "unknown-annotation-member": {
+    "expected": "sha256:426f225568e9670d202c1899f08b319338f568b7102af07f97c4b92ea06b1ba2",
+    "note": "An unknown member inside annotations is covered."
+  },
+  "annotation-known-only": {
+    "expected": "sha256:5340df3cc0454a22ddc7846362b69195459c0512a69f635fab4b5e820d682c86",
+    "note": "Same annotations without the unknown member."
+  },
+  "proto-key-in-properties": {
+    "expected": "sha256:96ee89035a9af4fda103b9ae4b360fb6c172e5d7fecf78949a0237164e7c227c",
+    "note": "A property named __proto__ is an ordinary key; parsers must keep it."
+  },
+  "proto-control-in-properties": {
+    "expected": "sha256:9d4424057d78d839a0e9ac9c136ab866c7c17620338df7dde42e60dda65923d9",
+    "note": "Control for the __proto__ cases."
+  },
+  "proto-key-in-property": {
+    "expected": "sha256:14f15e2242e7015de058dbee158ebff119a68ff6751971c55dc2a2a468aba991",
+    "note": "__proto__ one level deeper, inside properties.q."
+  },
+  "proto-key-in-property-control": {
+    "expected": "sha256:603148b397c3e7222f194e4a2ef2902d07e527fbdd89e4b24495956b988137c4",
+    "note": "Control: properties.q without the __proto__ member."
+  },
+  "proto-key-in-defs": {
+    "expected": "sha256:90bdc48c9ecb01ab60427b933f348b4217e8b8c30cbcdd413df2b351235ad9c9",
+    "note": "__proto__ as a $defs name."
+  },
+  "lone-surrogate-key": {
+    "expected": null,
+    "note": "Unpaired high surrogate in a key: no digest."
+  },
+  "lone-surrogate-value": {
+    "expected": null,
+    "note": "Unpaired low surrogate in a string value: no digest."
+  },
+  "lone-surrogate-high-at-end": {
+    "expected": null,
+    "note": "High surrogate with no low surrogate after it: no digest."
+  },
+  "lone-surrogate-reversed-pair": {
+    "expected": null,
+    "note": "Low then high is two lone surrogates: no digest."
+  },
+  "surrogate-pair-escaped": {
+    "expected": "sha256:389022b04d8f72a5832d841e5c31378d9faa970dd054fe5b624cd8e39725edbe",
+    "note": "A valid escaped pair is one code point and gets a digest."
+  },
+  "surrogate-pair-literal": {
+    "expected": "sha256:389022b04d8f72a5832d841e5c31378d9faa970dd054fe5b624cd8e39725edbe",
+    "note": "The same code point written as UTF-8 bytes."
+  },
+  "key-nfc": {
+    "expected": "sha256:fec92c91a761a783edc660249ec6f50bd52190a0dd9f4cf3f76422657f7d4a5e",
+    "note": "Key in NFC (U+00E9), raw UTF-8."
+  },
+  "key-nfd": {
+    "expected": "sha256:6db82c66ed966c1669f07f796f6a05207909c5e8928f463030c27f83fd50bd37",
+    "note": "Key in NFD (e + U+0301). No Unicode normalization: differs from key-nfc."
+  },
+  "number-0": {
+    "expected": "sha256:589afe07606624f77ea83b07b41049e42b25d9171b91152b925e37a2ffe246d5",
+    "note": "Control for number-minus-zero."
+  },
+  "number-minus-zero": {
+    "expected": "sha256:589afe07606624f77ea83b07b41049e42b25d9171b91152b925e37a2ffe246d5",
+    "note": "-0.0 serializes as 0."
+  },
+  "number-1e21": {
+    "expected": null,
+    "note": "1e21 is above the limit: no digest."
+  },
+  "number-0.1-plus-0.2": {
+    "expected": "sha256:529dc50e541014c6c6465173bc44c09d925ad801fffc5866d73d51480cae3e97",
+    "note": "The double nearest 0.1+0.2 keeps all 17 digits."
+  },
+  "number-0.3": {
+    "expected": "sha256:abd051c2e57c37504b79a2d03605b22081ee498d067a09140e12ed1da0d8154f",
+    "note": "Control for number-0.1-plus-0.2."
+  },
+  "number-float-2^53-minus-1": {
+    "expected": "sha256:1807a9b261ede87238f4c1c46974b2d62cf8f95f1f4efbf5271d37139ab38d42",
+    "note": "Float form of 2^53-1 equals the integer form."
+  },
+  "number-float-2^53-no-digest": {
+    "expected": null,
+    "note": "Float form of 2^53: no digest."
+  },
+  "nan-text": {
+    "expected": null,
+    "note": "Not JSON. Python json.loads accepts NaN, JSON.parse rejects the text; both give none."
+  },
+  "infinity-text": {
+    "expected": null,
+    "note": "Not JSON. Python json.loads accepts -Infinity; no digest either way."
+  },
+  "annotations-meta-kept": {
+    "expected": "sha256:b4204c05edd9f3f83919023fc93f4d98f59b299c5c39c499889bb3ef05fd8bb8",
+    "note": "_meta inside annotations is covered."
+  },
+  "meta-top-removed-nested-kept": {
+    "expected": "sha256:b4204c05edd9f3f83919023fc93f4d98f59b299c5c39c499889bb3ef05fd8bb8",
+    "note": "Top-level _meta removed, annotations._meta kept."
+  },
+  "duplicate-key-last-wins": {
+    "expected": "sha256:4c7994c96b1b7bbb776b3a05e642d8ab5c8431e516b095618791aa1a95ec9a90",
+    "note": "Duplicate key in raw text. The parser's last-wins result is digested (known limit)."
+  },
+  "duplicate-key-last-value": {
+    "expected": "sha256:4c7994c96b1b7bbb776b3a05e642d8ab5c8431e516b095618791aa1a95ec9a90",
+    "note": "What duplicate-key-last-wins parses to."
+  }
+}

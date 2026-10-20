@@ -1,0 +1,16 @@
+{
+  "lockError": null,
+  "shown": [
+    "search",
+    "fetch"
+  ],
+  "withheld": {},
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "allow",
+    "fetch": "allow"
+  }
+}

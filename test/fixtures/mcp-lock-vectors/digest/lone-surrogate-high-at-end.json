@@ -1,0 +1,1 @@
+{"name": "summarize", "description": "Summarize text.\ud83d", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}

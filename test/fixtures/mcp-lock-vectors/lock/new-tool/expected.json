@@ -1,0 +1,19 @@
+{
+  "lockError": null,
+  "shown": [
+    "search",
+    "fetch"
+  ],
+  "withheld": {
+    "delete_page": "new-tool"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "allow",
+    "fetch": "allow",
+    "delete_page": "new-tool"
+  }
+}

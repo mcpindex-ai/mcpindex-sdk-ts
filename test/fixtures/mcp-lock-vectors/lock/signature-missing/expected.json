@@ -1,0 +1,16 @@
+{
+  "lockError": "lock-signature-invalid",
+  "shown": [],
+  "withheld": {
+    "search": "lock-signature-invalid",
+    "fetch": "lock-signature-invalid"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": true,
+  "calls": {
+    "search": "lock-signature-invalid",
+    "fetch": "lock-signature-invalid"
+  }
+}

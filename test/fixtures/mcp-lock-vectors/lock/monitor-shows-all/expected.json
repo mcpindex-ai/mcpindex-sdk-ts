@@ -1,0 +1,28 @@
+{
+  "lockError": null,
+  "shown": [
+    "search",
+    "fetch",
+    "count",
+    "search",
+    "archive"
+  ],
+  "withheld": {},
+  "flagged": {
+    "search": "duplicate-name",
+    "fetch": "upstream-changed",
+    "count": "no-digest",
+    "archive": "new-tool"
+  },
+  "removed": [
+    "delete_page"
+  ],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "allow",
+    "fetch": "allow",
+    "count": "allow",
+    "archive": "allow"
+  }
+}

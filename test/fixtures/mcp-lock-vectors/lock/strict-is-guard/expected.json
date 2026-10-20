@@ -1,0 +1,17 @@
+{
+  "lockError": null,
+  "shown": [
+    "search"
+  ],
+  "withheld": {
+    "fetch": "upstream-changed"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": "instructions-changed",
+  "stripInstructions": true,
+  "calls": {
+    "search": "allow",
+    "fetch": "upstream-changed"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "lockError": null,
+  "shown": [],
+  "withheld": {
+    "search": "unlocked-server",
+    "fetch": "unlocked-server"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": "instructions-changed",
+  "stripInstructions": true,
+  "calls": {
+    "search": "unlocked-server",
+    "fetch": "unlocked-server"
+  }
+}

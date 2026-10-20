@@ -1,0 +1,1 @@
+{"name": "summarize", "description": "Summarize text.", "description": "Second description.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}

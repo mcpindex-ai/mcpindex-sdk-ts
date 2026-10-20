@@ -1,0 +1,17 @@
+{
+  "lockError": null,
+  "shown": [
+    "fetch"
+  ],
+  "withheld": {
+    "search": "duplicate-name"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "duplicate-name",
+    "fetch": "allow"
+  }
+}
