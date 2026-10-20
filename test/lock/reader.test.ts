@@ -118,15 +118,16 @@ test("signer configured: a good fake signature passes; missing bundle, bad bundl
   try {
     const lockDir = join(c.root, ".mcp", "lock");
     // No bundle.
-    assert.equal(await reason(c.root, { signer: SIGNER, verifier: okVerifier }), "lock-signature-invalid");
+    assert.equal(await reason(c.root, { signer: SIGNER, sequenceStore: true, verifier: okVerifier }), "lock-signature-invalid");
     writeFileSync(join(lockDir, "MANIFEST.json.sigstore"), "{}");
     // The manifest lists every file, and now there is a bundle it does not list:
     // the bundle is excluded from the manifest by definition.
-    assert.equal(await reason(c.root, { signer: SIGNER, verifier: okVerifier }), null);
-    assert.equal(await reason(c.root, { signer: SIGNER, verifier: { verify: async () => false } }), "lock-signature-invalid");
+    assert.equal(await reason(c.root, { signer: SIGNER, sequenceStore: true, verifier: okVerifier }), null);
+    assert.equal(await reason(c.root, { signer: SIGNER, sequenceStore: true, verifier: { verify: async () => false } }), "lock-signature-invalid");
     assert.equal(
       await reason(c.root, {
         signer: SIGNER,
+        sequenceStore: true,
         verifier: {
           verify: async () => {
             throw new Error("boom");
@@ -135,7 +136,9 @@ test("signer configured: a good fake signature passes; missing bundle, bad bundl
       }),
       "lock-signature-invalid",
     );
-    assert.equal(await reason(c.root, { signer: SIGNER }), "lock-signature-invalid");
+    assert.equal(await reason(c.root, { signer: SIGNER, sequenceStore: true }), "lock-signature-invalid");
+    // A signer without a sequence store is refused before the bundle is looked at.
+    assert.equal(await reason(c.root, { signer: SIGNER, verifier: okVerifier }), "lock-signature-invalid");
     // Without a signer nothing is verified and the bundle is ignored.
     assert.equal(await reason(c.root), null);
   } finally {
@@ -153,6 +156,7 @@ test("the verifier sees the exact manifest bytes the reader then parses", async 
     let seenBundle: Buffer | null = null;
     await loadLock(c.root, {
       signer: SIGNER,
+      sequenceStore: true,
       verifier: {
         verify: async (m, b, s) => {
           seen = Buffer.from(m);
@@ -174,7 +178,7 @@ test("sequence rollback with a valid signature is lock-signature-invalid; equal 
   try {
     writeFileSync(join(c.root, ".mcp", "lock", "MANIFEST.json.sigstore"), "{}");
     const seq = (JSON.parse(readFileSync(join(c.root, ".mcp", "lock", "MANIFEST.json"), "utf8")) as { sequence: number }).sequence;
-    const cfg = (last: number): ReaderConfig => ({ signer: SIGNER, verifier: okVerifier, lastSequence: last });
+    const cfg = (last: number): ReaderConfig => ({ signer: SIGNER, sequenceStore: true, verifier: okVerifier, lastSequence: last });
     assert.equal(await reason(c.root, cfg(seq + 1)), "lock-signature-invalid");
     assert.equal(await reason(c.root, cfg(seq)), null);
     assert.equal(await reason(c.root, cfg(0)), null);

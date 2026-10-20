@@ -248,6 +248,7 @@ export class FileLockStore implements LockStore {
       const config: ReaderConfig = {
         requireManifest: this.#config.requireManifest ?? false,
         signer,
+        sequenceStore: this.#sequences !== null,
         verifier: this.#config.verifier ?? null,
         lastSequence: last,
       };

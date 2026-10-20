@@ -9,12 +9,18 @@
  * `result.tools`, `__proto__` included, is still there as sent.
  *
  * For a `tools/list` request from the client it:
- *   - matches the response by request id, compared by JSON type and value (a
- *     response whose id is missing, not outstanding, or already answered is
- *     dropped and reported to onerror). Only that response may carry tools to
- *     the client: any other frame with `result.tools` (a request or
- *     notification frame that also has a result, a response to some other
- *     request) is dropped and reported;
+ *   - starts a listing (section 9.2.1) when it sends the request. Until the
+ *     listing is decided or fails, every `tools/call` is refused with
+ *     `no-listing`. A second cursorless `tools/list` abandons the first, whose
+ *     request is answered with an error;
+ *   - classifies every frame from the server as section 9.2.2 says
+ *     (classifyFrame): only the response to an unanswered `tools/list`,
+ *     matched by id with exact JSON type and value, can carry tools, and only
+ *     that or the `initialize` response can carry instructions. Anything else
+ *     that carries them, or has both a method and a result or error, is
+ *     dropped and reported to onerror; a client request it matched is
+ *     answered with an error. A response whose id matches no request is
+ *     dropped too;
  *   - follows `nextCursor` itself, sending its own page requests under private
  *     ids, so one listing is every page (section 9.2). The client gets one
  *     response with every shown tool and no cursor. A client request that
@@ -22,29 +28,29 @@
  *     listing in lock mode;
  *   - loads a lock snapshot, runs checkListing on the raw tools, installs the
  *     decision in the CallGate, emits a listing event, and passes on only the
- *     shown raw entries, without a top-level `_meta` that does not match the
- *     approved metaDigest (under guard). The client then parses exactly those.
- *
- * From the first page of a listing until its decision is installed every
- * `tools/call` is refused with `no-listing`.
+ *     shown raw entries, without a top-level `_meta` that the decision removes
+ *     (section 9.2.3). The client then parses exactly those.
  *
  * Every outgoing `tools/call` goes through the CallGate first. A refused call
  * is never sent; the client gets a -32011 error with data.reason. This covers
  * callTool, request, requestStream and the task helpers alike, because they
- * all end in Transport.send.
+ * all end in Transport.send. A call on a snapshot older than maxStalenessMs
+ * (default 60 s) reloads it first; the reload can only shrink the allow-list,
+ * and if it fails the call gets `lock-stale` and the next call tries again.
  *
  * `notifications/tools/list_changed` is passed on and marks a listing as due.
- * It does not change the allow-list; a name the server just added is not
- * callable until a listing that shows it completes. A listing that fails (an error
- * response, a result with no tools array, a page that cannot be requested, a
- * page or tool limit exceeded) is different: every call is then refused with
- * `unreachable` until a listing completes (section 9.5). Server instructions arrive in the
- * initialize result; they are checked there and stripped when the check says so.
+ * It does not change the allow-list, and this adapter does not start a
+ * listing on its own (the spec's SHOULD); the client asks for one. A listing
+ * that fails (an error response, a result with no tools array, a page that
+ * cannot be requested or gets no response, a page or tool limit exceeded)
+ * refuses every call with `unreachable` until a listing completes (section
+ * 9.5). Server instructions arrive in the initialize result; they are checked
+ * there and stripped when the check says so.
  *
  * Unanswered requests are tracked in bounded maps. An entry leaves on its
  * response, on the client's notifications/cancelled, after REQUEST_TTL_MS, or,
- * when the map is full, oldest first. A page request that leaves that way
- * fails its listing.
+ * when the map is full, oldest first. If that entry is the listing in
+ * progress, the listing fails.
  *
  * Lock mode has no auto-accept, first-use pin or re-pin, and this adapter
  * takes no option that would add one.
@@ -54,11 +60,11 @@ import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk
 import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import { CallGate, DEFAULT_MAX_STALENESS_MS, checkInstructions, checkListing, isPosture, refusalError } from "./check.js";
-import type { CallReason, Decision } from "./check.js";
+import type { CallReason, Decision, ToolReason } from "./check.js";
 import { listingEvent, refusalEvent, emit } from "./events.js";
 import type { EventContext, LockEventSink } from "./events.js";
 import { LockError, validateIdentity } from "./lock.js";
-import type { Identity, Posture } from "./lock.js";
+import type { Identity, LockErrorReason, Posture } from "./lock.js";
 import { snapshotOfError } from "./store.js";
 import type { LockSnapshot, LockStore } from "./store.js";
 
@@ -100,10 +106,50 @@ function own(obj: Rpc, key: string): unknown {
   return Object.getOwnPropertyDescriptor(obj, key)?.value;
 }
 
+function hasOwn(obj: Rpc, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/** Map key for a request id: JSON type and value. Null, booleans and the rest have none. */
 function idKey(id: unknown): string | null {
   if (typeof id === "number" && Number.isFinite(id)) return `n:${id}`;
   if (typeof id === "string") return `s:${id}`;
   return null;
+}
+
+/** Section 9.2.2: `id` equals one of `ids` in JSON type and value. Null matches nothing. */
+export function idMatches(id: unknown, ids: readonly unknown[]): boolean {
+  const key = idKey(id);
+  return key !== null && ids.some((i) => idKey(i) === key);
+}
+
+export type FrameKind = "listing" | "handshake" | "drop" | "relay";
+
+/**
+ * What the host does with one frame from the server (section 9.2.2):
+ * `listing` (a page of the listing whose request it answers), `handshake`
+ * (the initialize response; its instructions are checked), `drop`, or
+ * `relay`. `isInflight` and `isHandshake` say whether an id matches an
+ * unanswered tools/list or initialize request; unanswered tools/list
+ * requests are matched first.
+ */
+export function classifyFrame(
+  frame: unknown,
+  isInflight: (id: unknown) => boolean,
+  isHandshake: (id: unknown) => boolean,
+): FrameKind {
+  if (!isObj(frame)) return "drop";
+  const result = own(frame, "result");
+  const carriesTools = isObj(result) && hasOwn(result, "tools");
+  const carriesInstructions = isObj(result) && hasOwn(result, "instructions");
+  if (hasOwn(frame, "method")) return hasOwn(frame, "result") || hasOwn(frame, "error") ? "drop" : "relay";
+  if (!hasOwn(frame, "id")) return carriesTools || carriesInstructions ? "drop" : "relay";
+  const id = own(frame, "id");
+  if (isInflight(id)) return "listing";
+  if (carriesTools) return "drop";
+  if (isHandshake(id)) return "handshake";
+  if (carriesInstructions) return "drop";
+  return "relay";
 }
 
 /** Copy a result object member by member, leaving out `drop`. */
@@ -117,24 +163,22 @@ function copyWithout(result: Rpc, drop: readonly string[]): Rpc {
 }
 
 interface Collecting {
-  readonly clientId: RequestId;
   readonly first: Rpc;
   readonly tools: unknown[];
   readonly cursors: Set<string>;
   pages: number;
-  /** True from the first page until the listing is decided or fails. */
-  open: boolean;
+}
+
+/** The listing in progress: the client's request, and its pages once the first is in. */
+interface Listing {
+  readonly clientId: RequestId;
+  readonly clientKey: string;
+  collecting: Collecting | null;
 }
 
 interface Pending<T> {
   readonly value: T;
   readonly at: number;
-}
-
-/** True when a JSON-RPC frame has a result object with a `tools` member. */
-function carriesTools(message: Rpc): boolean {
-  const result = own(message, "result");
-  return isObj(result) && Object.prototype.hasOwnProperty.call(result, "tools");
 }
 
 export class LockedTransport implements Transport {
@@ -153,7 +197,8 @@ export class LockedTransport implements Transport {
   /** Client request id key to method, for every request still unanswered. */
   readonly #outstanding = new Map<string, Pending<string>>();
   /** Private page request id key to the listing it belongs to. */
-  readonly #pages = new Map<string, Pending<Collecting>>();
+  readonly #pages = new Map<string, Pending<Listing>>();
+  #current: Listing | null = null;
   #queue: Promise<void> = Promise.resolve();
   #served: unknown = undefined;
   #lastTools: readonly unknown[] | null = null;
@@ -216,7 +261,7 @@ export class LockedTransport implements Transport {
     if (isObj(msg) && own(msg, "method") === "notifications/cancelled") {
       const params = own(msg, "params");
       const key = isObj(params) ? idKey(own(params, "requestId")) : null;
-      if (key !== null) this.#outstanding.delete(key);
+      if (key !== null) this.#forget(key, "the client cancelled the listing request");
     }
     if (isObj(msg) && own(msg, "method") === "tools/call" && idKey(own(msg, "id")) === null) {
       throw new Error("lock mode refuses a tools/call without a valid request id");
@@ -224,6 +269,7 @@ export class LockedTransport implements Transport {
     if (isObj(msg) && typeof own(msg, "method") === "string" && idKey(own(msg, "id")) !== null) {
       const method = own(msg, "method") as string;
       const id = own(msg, "id") as RequestId;
+      const key = idKey(id) as string;
       const params = own(msg, "params");
       if (method === "tools/call") {
         const name = isObj(params) ? own(params, "name") : undefined;
@@ -244,19 +290,80 @@ export class LockedTransport implements Transport {
         });
         return;
       }
-      const key = idKey(id) as string;
-      this.#outstanding.delete(key); // a reused id moves to the newest position
+      this.#forget(key, "the listing request id was reused");
       while (this.#outstanding.size >= MAX_OUTSTANDING) {
-        const oldest = this.#outstanding.keys().next().value as string;
-        this.#outstanding.delete(oldest);
+        this.#forget(this.#outstanding.keys().next().value as string, "too many requests without a response");
       }
       this.#outstanding.set(key, { value: method, at: this.#now() });
+      if (method === "tools/list") {
+        // Section 9.2.1: the listing starts now; an earlier one is abandoned.
+        if (this.#current !== null) this.#abandon(this.#current);
+        this.#current = { clientId: id, clientKey: key, collecting: null };
+        this.gate.beginListing();
+        try {
+          await this.#inner.send(message, options);
+        } catch (exc) {
+          this.#outstanding.delete(key);
+          if (this.#current?.clientKey === key) {
+            this.#current = null;
+            this.gate.markUnreachable();
+          }
+          throw exc;
+        }
+        return;
+      }
     }
     await this.#inner.send(message, options);
   }
 
+  /** Stop tracking a client request. If it is the listing in progress, that listing fails. */
+  #forget(key: string, why: string): void {
+    if (!this.#outstanding.delete(key)) return;
+    const current = this.#current;
+    if (current !== null && current.clientKey === key) this.#fail(current, why);
+  }
+
+  /** A newer cursorless tools/list replaced this listing. */
+  #abandon(listing: Listing): void {
+    this.#dropPages(listing);
+    this.#outstanding.delete(listing.clientKey);
+    if (this.#current === listing) this.#current = null;
+    this.#deliverLater({
+      jsonrpc: "2.0",
+      id: listing.clientId,
+      error: { code: -32603, message: "lock mode: a newer tools/list replaced this listing" },
+    });
+  }
+
+  #dropPages(listing: Listing): void {
+    for (const [key, entry] of this.#pages) if (entry.value === listing) this.#pages.delete(key);
+  }
+
+  /**
+   * The listing failed. Fail closed: every call is refused with unreachable
+   * until a listing completes, and the client's request gets an error.
+   */
+  #fail(listing: Listing, why: string, error?: unknown): void {
+    if (this.#current !== listing) return;
+    this.#current = null;
+    this.#dropPages(listing);
+    this.#outstanding.delete(listing.clientKey);
+    this.gate.markUnreachable();
+    this.#deliver({ jsonrpc: "2.0", id: listing.clientId, error: error ?? { code: -32603, message: `lock mode: ${why}` } });
+  }
+
   async #checkCall(name: string | null): Promise<"allow" | CallReason> {
-    if (this.gate.isStale() && !this.gate.listingInProgress) await this.#refresh();
+    const decision = this.gate.decision;
+    if (
+      this.gate.isStale() &&
+      !this.gate.listingInProgress &&
+      !this.gate.unreachable &&
+      decision !== null &&
+      decision.lockError === null
+    ) {
+      // Section 9.8: a decided whole-lock failure never reloads; it keeps its reason.
+      await this.#refresh();
+    }
     const verdict = this.gate.check(name ?? "");
     // A name that is not a string is never on an allow-list.
     if (name === null && verdict === "allow") return "not-listed";
@@ -268,31 +375,42 @@ export class LockedTransport implements Transport {
     const cutoff = this.#now() - REQUEST_TTL_MS;
     for (const [key, entry] of this.#outstanding) {
       if (entry.at > cutoff) break;
-      this.#outstanding.delete(key);
+      this.#forget(key, "the listing request got no response");
     }
     for (const [key, entry] of this.#pages) {
       if (entry.at > cutoff) break;
       this.#pages.delete(key);
-      this.#listingFailed(entry.value, "page request got no response");
+      this.#fail(entry.value, "page request got no response");
     }
   }
 
-  /** Reload the snapshot and re-check the last listing; the allow-list can only shrink. */
+  /**
+   * Reload the snapshot and re-check the last listing (section 9.8). The
+   * allow-list keeps only names allowed both before and after; a name the
+   * reload drops takes its new reason. A reload whose lock does not load
+   * changes nothing, so the call gets lock-stale and the next one retries.
+   */
   async #refresh(): Promise<void> {
     const previous = this.gate.decision;
     const tools = this.#lastTools;
-    if (previous === null || tools === null || this.gate.unreachable || this.gate.listingInProgress) return;
+    if (previous === null || tools === null) return;
     let snapshot: LockSnapshot;
     try {
       snapshot = await this.#store.loadSnapshot();
     } catch {
-      return; // stays stale; calls get lock-stale
+      return;
     }
+    if (snapshot.lock instanceof LockError) return;
     // A listing that started, completed or failed during the await is newer; never overwrite it.
     if (this.gate.decision !== previous || this.gate.unreachable || this.gate.listingInProgress) return;
     const fresh = checkListing(snapshot.lock, this.#identity, { tools, instructions: this.#served }, this.#posture);
-    const callable = new Set([...fresh.callable].filter((n) => previous.callable.has(n)));
-    this.gate.record(Object.freeze({ ...fresh, callable }), snapshot);
+    const callable = new Set([...previous.callable].filter((n) => fresh.callable.has(n)));
+    const withheld = new Map<string, ToolReason | LockErrorReason>(previous.withheld);
+    for (const name of previous.callable) {
+      const reason = callable.has(name) ? undefined : fresh.withheld.get(name);
+      if (reason !== undefined) withheld.set(name, reason); // otherwise checkCall says not-listed
+    }
+    this.gate.record(Object.freeze({ ...previous, callable, withheld }), snapshot);
   }
 
   #deliver(message: Rpc, extra?: MessageExtraInfo): void {
@@ -311,74 +429,99 @@ export class LockedTransport implements Transport {
     }
   }
 
+  #isInflight(id: unknown): boolean {
+    const key = idKey(id);
+    return key !== null && (this.#pages.has(key) || this.#outstanding.get(key)?.value === "tools/list");
+  }
+
+  #isHandshake(id: unknown): boolean {
+    const key = idKey(id);
+    return key !== null && this.#outstanding.get(key)?.value === "initialize";
+  }
+
   async #incoming(message: unknown, extra?: MessageExtraInfo): Promise<void> {
-    if (!isObj(message)) {
-      this.onerror?.(new Error("dropped a message that is not a JSON-RPC object"));
-      return;
-    }
     this.#expire();
-    const method = own(message, "method");
-    if (method !== undefined && carriesTools(message)) {
-      this.onerror?.(new Error("dropped a frame that has both a method and result.tools"));
+    const kind = classifyFrame(
+      message,
+      (id) => this.#isInflight(id),
+      (id) => this.#isHandshake(id),
+    );
+    if (kind === "drop") {
+      this.#drop(message);
       return;
     }
-    if (typeof method === "string") {
-      if (method === "notifications/tools/list_changed" && own(message, "id") === undefined) this.#listingDue = true;
-      this.#deliver(message, extra);
+    const msg = message as Rpc;
+    if (kind === "relay" && hasOwn(msg, "method")) {
+      if (own(msg, "method") === "notifications/tools/list_changed" && !hasOwn(msg, "id")) this.#listingDue = true;
+      this.#deliver(msg, extra);
       return;
     }
-    const hasResult = own(message, "result") !== undefined;
-    const hasError = own(message, "error") !== undefined;
-    if (!hasResult && !hasError) {
-      this.#deliver(message, extra); // not a response; the client reports what it is
+    const key = idKey(own(msg, "id"));
+    if (kind === "relay" && key === null) {
+      this.#deliver(msg, extra); // a response without a usable id and without tools; the client reports it
       return;
     }
-    const key = idKey(own(message, "id"));
-    if (key === null) {
-      this.onerror?.(new Error("dropped a response with a missing or invalid id"));
-      return;
-    }
-    const page = this.#pages.get(key);
+    const page = key === null ? undefined : this.#pages.get(key);
     if (page !== undefined) {
-      this.#pages.delete(key);
-      await this.#onPage(page.value, message);
+      this.#pages.delete(key as string);
+      await this.#onPage(page.value, msg);
       return;
     }
-    const entry = this.#outstanding.get(key);
+    const entry = key === null ? undefined : this.#outstanding.get(key);
     if (entry === undefined) {
       this.onerror?.(new Error("dropped a response that matches no outstanding request"));
       return;
     }
-    this.#outstanding.delete(key);
-    const pending = entry.value;
-    if (pending !== "tools/list" && carriesTools(message)) {
-      this.onerror?.(new Error(`dropped a response to ${pending} that carries result.tools`));
+    this.#outstanding.delete(key as string);
+    if (kind === "handshake") {
+      await this.#onInitialize(msg, extra);
       return;
     }
-    if (pending === "initialize" && hasResult) {
-      await this.#onInitialize(message, extra);
-      return;
-    }
-    if (pending === "tools/list" && hasResult) {
-      const result = own(message, "result");
-      if (!isObj(result)) {
-        this.#listingFailed(own(message, "id") as RequestId, "tools/list result is not an object");
+    if (kind === "listing") {
+      const listing = this.#current;
+      if (listing === null || listing.clientKey !== key) return; // abandoned or failed already
+      const error = own(msg, "error");
+      if (error !== undefined) {
+        this.#fail(listing, "tools/list failed", error);
         return;
       }
-      const collecting: Collecting = {
-        clientId: own(message, "id") as RequestId,
-        first: result,
-        tools: [],
-        cursors: new Set(),
-        pages: 0,
-        open: true,
-      };
-      this.gate.beginListing();
-      await this.#onPage(collecting, message);
+      const result = own(msg, "result");
+      if (!isObj(result)) {
+        this.#fail(listing, "tools/list result is not an object");
+        return;
+      }
+      listing.collecting = { first: result, tools: [], cursors: new Set(), pages: 0 };
+      await this.#onPage(listing, msg);
       return;
     }
-    if (pending === "tools/list") this.gate.markUnreachable(); // an error response: the listing failed
-    this.#deliver(message, extra);
+    this.#deliver(msg, extra);
+  }
+
+  /** Report a dropped frame, and answer the client request it matched so the client does not wait. */
+  #drop(message: unknown): void {
+    this.onerror?.(new Error("dropped a frame from the server that section 9.2.2 does not allow to reach the client"));
+    if (!isObj(message)) return;
+    const key = idKey(own(message, "id"));
+    if (key === null) return;
+    const page = this.#pages.get(key);
+    if (page !== undefined) {
+      this.#pages.delete(key);
+      this.#fail(page.value, "the server answered a page request with a frame that was dropped");
+      return;
+    }
+    const entry = this.#outstanding.get(key);
+    if (entry === undefined) return;
+    const current = this.#current;
+    if (current !== null && current.clientKey === key) {
+      this.#fail(current, "the server answered tools/list with a frame that was dropped");
+      return;
+    }
+    this.#outstanding.delete(key);
+    this.#deliver({
+      jsonrpc: "2.0",
+      id: own(message, "id") as RequestId,
+      error: { code: -32603, message: `lock mode: the response to ${entry.value} was dropped` },
+    });
   }
 
   async #onInitialize(message: Rpc, extra?: MessageExtraInfo): Promise<void> {
@@ -397,83 +540,55 @@ export class LockedTransport implements Transport {
     this.#deliver({ ...copyWithout(message, ["result"]), result: copyWithout(result, ["instructions"]) }, extra);
   }
 
-  /** A listing in progress ends without a decision. */
-  #close(collecting: Collecting): void {
-    if (!collecting.open) return;
-    collecting.open = false;
-    this.gate.endListing();
-  }
-
-  #listingFailed(collecting: Collecting | RequestId, why: string): void {
-    // The server sent something that is not a listing. Fail closed: no call
-    // proceeds until a listing completes.
-    let clientId: RequestId;
-    if (typeof collecting === "object") {
-      if (!collecting.open) return;
-      this.#close(collecting);
-      clientId = collecting.clientId;
-    } else {
-      clientId = collecting;
-    }
-    this.gate.markUnreachable();
-    this.#deliver({ jsonrpc: "2.0", id: clientId, error: { code: -32603, message: `lock mode: ${why}` } });
-  }
-
-  async #onPage(collecting: Collecting, message: Rpc): Promise<void> {
-    if (!collecting.open) return;
+  async #onPage(listing: Listing, message: Rpc): Promise<void> {
+    const collecting = listing.collecting;
+    if (this.#current !== listing || collecting === null) return;
     const error = own(message, "error");
     if (error !== undefined) {
       // A failed page means the listing failed; no earlier allow-list is used.
-      this.#close(collecting);
-      this.gate.markUnreachable();
-      this.#deliver({ jsonrpc: "2.0", id: collecting.clientId, error });
+      this.#fail(listing, "a page request failed", error);
       return;
     }
     const result = own(message, "result");
     const tools = isObj(result) ? own(result, "tools") : undefined;
     if (!Array.isArray(tools)) {
-      this.#listingFailed(collecting, "tools/list result has no tools array");
+      this.#fail(listing, "tools/list result has no tools array");
       return;
     }
     collecting.pages += 1;
     for (const t of tools) collecting.tools.push(t);
     if (collecting.pages > MAX_LIST_PAGES || collecting.tools.length > MAX_LIST_TOOLS) {
-      this.#listingFailed(collecting, "listing exceeds the page or tool limit");
+      this.#fail(listing, "listing exceeds the page or tool limit");
       return;
     }
     const cursor = isObj(result) ? own(result, "nextCursor") : undefined;
     if (typeof cursor === "string" && cursor !== "") {
       if (collecting.cursors.has(cursor)) {
-        this.#listingFailed(collecting, "server repeated a cursor");
+        this.#fail(listing, "server repeated a cursor");
         return;
       }
       collecting.cursors.add(cursor);
       this.#seq += 1;
       const pid = `mcplock:${this.#tag}:${this.#seq}`;
       const pkey = idKey(pid) as string;
-      while (this.#pages.size >= MAX_OUTSTANDING) {
-        const [oldest, entry] = this.#pages.entries().next().value as [string, Pending<Collecting>];
-        this.#pages.delete(oldest);
-        this.#listingFailed(entry.value, "too many listings in progress");
-      }
-      this.#pages.set(pkey, { value: collecting, at: this.#now() });
+      this.#pages.set(pkey, { value: listing, at: this.#now() });
       try {
         await this.#inner.send({ jsonrpc: "2.0", id: pid, method: "tools/list", params: { cursor } } as JSONRPCMessage);
       } catch (exc) {
         this.#pages.delete(pkey);
-        this.#listingFailed(collecting, `page request failed: ${(exc as Error).message}`);
+        this.#fail(listing, `page request failed: ${(exc as Error).message}`);
       }
       return;
     }
-    await this.#finish(collecting);
+    await this.#finish(listing, collecting);
   }
 
-  async #finish(collecting: Collecting): Promise<void> {
+  async #finish(listing: Listing, collecting: Collecting): Promise<void> {
     const tools = collecting.tools;
     const snapshot = await this.#snapshot();
-    if (!collecting.open) return; // dropped while the snapshot loaded
+    if (this.#current !== listing) return; // abandoned or failed while the snapshot loaded
     const decision = checkListing(snapshot.lock, this.#identity, { tools, instructions: this.#served }, this.#posture);
-    this.#close(collecting);
+    this.#current = null;
     this.gate.record(decision, snapshot);
     this.#lastTools = tools;
     this.#listingDue = false;
@@ -483,7 +598,7 @@ export class LockedTransport implements Transport {
       const tool = tools[i];
       return decision.stripMeta.has(i) && isObj(tool) ? copyWithout(tool, ["_meta"]) : tool;
     });
-    this.#deliver({ jsonrpc: "2.0", id: collecting.clientId, result });
+    this.#deliver({ jsonrpc: "2.0", id: listing.clientId, result });
   }
 }
 

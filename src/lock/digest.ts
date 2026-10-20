@@ -166,16 +166,17 @@ export function canonicalBody(tool: unknown): Buffer | null {
 }
 
 /**
- * Digest of a tool's top-level `_meta` (draft 1c): sha256 of the RFC 8785
- * text of that value, under the same rules as the tool digest. Null when the
- * tool has no `_meta`, or when its `_meta` has no digest.
+ * Meta digest (section 2.3, draft 1c): sha256 of the RFC 8785 text of a
+ * tool's top-level `_meta`, under the rules of the tool digest with `_meta`
+ * at depth 1, as it sits in the tool. Null when the tool has no `_meta`, when
+ * `_meta` is not an object, or when the rules exclude it.
  */
 export function metaDigest(tool: unknown): string | null {
   if (!isObject(tool) || !Object.prototype.hasOwnProperty.call(tool, "_meta")) return null;
   const meta = own(tool, "_meta");
-  if (!wellFormed(meta, 0) || !numbersInRange(meta, 0)) return null;
+  if (!isObject(meta) || !wellFormed(meta, 1) || !numbersInRange(meta, 1)) return null;
   try {
-    return digestOf(serialize(meta, 0, false));
+    return digestOf(serialize(meta, 1, false));
   } catch {
     return null;
   }

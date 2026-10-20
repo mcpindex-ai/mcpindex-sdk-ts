@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 
 import { identityH16, slug } from "./lock.js";
 import type { Identity, LockErrorReason, Posture, Via } from "./lock.js";
-import type { CallReason, Decision, ToolReason } from "./check.js";
+import type { CallReason, Decision, MetaReason, ToolReason } from "./check.js";
 import { nowRfc3339 } from "./store.js";
 
 export const EVENT_SCHEMA = "mcpindex.lock.event/1";
@@ -42,6 +42,7 @@ export interface ListingEvent extends EventBase {
     readonly approved: string | null;
     readonly decision: "shown" | "withheld";
     readonly reason: ToolReason | LockErrorReason | null;
+    readonly meta: MetaReason | null;
   }>;
   readonly removed: readonly string[];
   readonly instructions: string | null;
@@ -100,6 +101,7 @@ export function listingEvent(ctx: EventContext, decision: Decision, snapshotId: 
       approved: t.approved,
       decision: t.decision,
       reason: t.reason,
+      meta: t.meta,
     })),
     removed: [...decision.removed],
     // Under a whole-lock failure the instructions are withheld with everything

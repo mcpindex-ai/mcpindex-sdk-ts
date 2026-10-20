@@ -278,8 +278,8 @@ test("Postgres store", { skip: skip ?? false }, async (t) => {
       assert.match(shard?.tools.get("m")?.metaDigest ?? "", /^sha256:[0-9a-f]{64}$/);
       assert.equal(shard?.tools.get("search")?.metaDigest, undefined);
       const d = checkListing(snap.lock, ID, { tools: [withMeta, { ...TOOL, _meta: { x: 1 } }] }, "guard");
-      assert.equal(d.meta.get("m"), undefined);
-      assert.equal(d.meta.get("search"), "meta-unapproved");
+      assert.deepEqual(d.meta.get("m"), { relay: true, flag: null });
+      assert.deepEqual(d.meta.get("search"), { relay: false, flag: "meta-unapproved" });
       // Tampering with the stored metaDigest breaks the chain.
       await exec("UPDATE mcplock.records SET meta_digest = $2 WHERE tenant_id = $1 AND seq = 1", [tid, "sha256:" + "1".repeat(64)]);
       const bad = await new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" } }).loadSnapshot();

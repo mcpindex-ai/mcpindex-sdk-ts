@@ -29,6 +29,19 @@ function lockOf(entries: Array<[string, unknown, string?]>): Lock {
 
 const SEARCH = { name: "search", inputSchema: { type: "object" } };
 
+test("call reason order: in progress, unreachable, none completed, whole-lock error, stale", () => {
+  let clock = 0;
+  const gate = new CallGate({ maxStalenessMs: 10, now: () => clock });
+  assert.equal(gate.check("search"), "no-listing");
+  gate.markUnreachable();
+  assert.equal(gate.check("search"), "unreachable");
+  gate.beginListing();
+  assert.equal(gate.check("search"), "no-listing");
+  gate.record(checkListing(new LockError("lock-unreadable", "x"), ID, { tools: [SEARCH] }, "guard"), SNAP);
+  clock = 100;
+  assert.equal(gate.check("search"), "lock-unreadable");
+});
+
 test("S6: a whole-lock error is reported before lock-stale", () => {
   let clock = 0;
   const gate = new CallGate({ maxStalenessMs: 10, now: () => clock });
@@ -63,29 +76,34 @@ test("S1: the gate refuses every call with no-listing while a listing is in prog
   assert.equal(gate.check("search"), "allow");
 });
 
-test("S3: the four _meta cases", () => {
+test("S3: the four _meta cases, and a _meta that is not an object", () => {
   const meta = { ui: { resourceUri: "ui://a" } };
   const withMeta = { ...SEARCH, _meta: meta };
   const changed = { ...SEARCH, _meta: { ui: { resourceUri: "ui://b" } } };
   const approvedMeta = metaDigest(withMeta) as string;
   assert.match(approvedMeta, /^sha256:[0-9a-f]{64}$/);
   assert.equal(metaDigest(SEARCH), null);
+  assert.equal(metaDigest({ ...SEARCH, _meta: "x" }), null);
   for (const posture of ["guard", "monitor"] as const) {
     const guard = posture === "guard";
     // Matches: relayed, no flag.
     const a = checkListing(lockOf([["search", SEARCH, approvedMeta]]), ID, { tools: [withMeta] }, posture);
     assert.deepEqual([...a.shown], ["search"]);
-    assert.equal(a.meta.size, 0);
+    assert.deepEqual(a.meta.get("search"), { relay: true, flag: null });
     assert.equal(a.stripMeta.size, 0);
     // Differs: shown, flagged meta-changed, removed under guard only.
     const b = checkListing(lockOf([["search", SEARCH, approvedMeta]]), ID, { tools: [changed] }, posture);
     assert.deepEqual([...b.shown], ["search"]);
-    assert.equal(b.meta.get("search"), "meta-changed");
+    assert.deepEqual(b.meta.get("search"), { relay: !guard, flag: "meta-changed" });
     assert.equal(b.stripMeta.has(0), guard);
     assert.ok(b.callable.has("search"));
+    assert.equal(b.tools[0]?.meta, "meta-changed");
+    // Not an object: no meta digest, so it changed.
+    const s = checkListing(lockOf([["search", SEARCH, approvedMeta]]), ID, { tools: [{ ...SEARCH, _meta: "x" }] }, posture);
+    assert.deepEqual(s.meta.get("search"), { relay: !guard, flag: "meta-changed" });
     // No metaDigest approved and a served _meta: meta-unapproved.
     const c = checkListing(lockOf([["search", SEARCH]]), ID, { tools: [withMeta] }, posture);
-    assert.equal(c.meta.get("search"), "meta-unapproved");
+    assert.deepEqual(c.meta.get("search"), { relay: !guard, flag: "meta-unapproved" });
     assert.equal(c.stripMeta.has(0), guard);
     // No served _meta: nothing to decide.
     const d = checkListing(lockOf([["search", SEARCH, approvedMeta]]), ID, { tools: [SEARCH] }, posture);

@@ -25,6 +25,15 @@ export interface ToolOutcome {
   readonly approved: string | null;
   readonly decision: "shown" | "withheld";
   readonly reason: ToolReason | LockErrorReason | null;
+  /** Section 9.2.3 flag for a shown tool's top-level `_meta`, else null. */
+  readonly meta: MetaReason | null;
+}
+
+/** Section 9.2.3 decision for one shown tool that has a top-level `_meta`. */
+export interface MetaDecision {
+  /** True when `_meta` reaches the client as served. */
+  readonly relay: boolean;
+  readonly flag: MetaReason | null;
 }
 
 export interface Decision {
@@ -44,11 +53,12 @@ export interface Decision {
   /** Indexes into the listing's tools array of the entries the model may see. */
   readonly shownIndexes: readonly number[];
   /**
-   * Shown tools whose served top-level `_meta` does not match the approved
-   * metaDigest: name to reason. Under guard that `_meta` is removed before the
-   * tool is relayed (stripMeta); under monitor it is relayed and reported.
+   * Every shown tool with a top-level `_meta`: name to whether it is relayed
+   * and its flag. A served `_meta` that does not match the approved
+   * metaDigest is flagged; under guard it is removed before the tool is
+   * relayed (stripMeta), under monitor it is relayed and reported.
    */
-  readonly meta: ReadonlyMap<string, MetaReason>;
+  readonly meta: ReadonlyMap<string, MetaDecision>;
   /** Indexes into the listing's tools array whose `_meta` is removed before relay. */
   readonly stripMeta: ReadonlySet<number>;
   /** One row per named listing entry, for the listing event. */
@@ -92,7 +102,7 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
   const withheld = new Map<string, ToolReason | LockErrorReason>();
   const flagged = new Map<string, ToolReason>();
   const callable = new Set<string>();
-  const meta = new Map<string, MetaReason>();
+  const meta = new Map<string, MetaDecision>();
   const stripMeta = new Set<number>();
   const tools: ToolOutcome[] = [];
 
@@ -101,7 +111,7 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
       const name = nameOf(tool);
       if (name === null) continue;
       withheld.set(name, lock.reason);
-      tools.push(freezeAll({ name, served: toolDigest(tool), approved: null, decision: "withheld", reason: lock.reason }));
+      tools.push(freezeAll({ name, served: toolDigest(tool), approved: null, decision: "withheld", reason: lock.reason, meta: null }));
     }
     return freezeAll({
       posture,
@@ -142,20 +152,22 @@ export function checkListing(lock: Lock | LockError, identity: Identity, listing
     const approved = entry?.digest ?? null;
     if (reason !== null && guard) {
       withheld.set(name, reason);
-      tools.push(freezeAll({ name, served: digest, approved, decision: "withheld", reason }));
+      tools.push(freezeAll({ name, served: digest, approved, decision: "withheld", reason, meta: null }));
       return;
     }
     if (reason !== null) flagged.set(name, reason);
+    let flag: MetaReason | null = null;
     if (hasTopMeta(tool)) {
       const approvedMeta = entry?.metaDigest;
-      if (approvedMeta === undefined) meta.set(name, "meta-unapproved");
-      else if (metaDigest(tool) !== approvedMeta) meta.set(name, "meta-changed");
-      if (meta.has(name) && guard) stripMeta.add(index);
+      if (approvedMeta === undefined) flag = "meta-unapproved";
+      else if (metaDigest(tool) !== approvedMeta) flag = "meta-changed";
+      meta.set(name, freezeAll({ relay: flag === null || !guard, flag }));
+      if (flag !== null && guard) stripMeta.add(index);
     }
     shown.push(name);
     shownIndexes.push(index);
     callable.add(name);
-    tools.push(freezeAll({ name, served: digest, approved, decision: "shown", reason }));
+    tools.push(freezeAll({ name, served: digest, approved, decision: "shown", reason, meta: flag }));
   });
 
   const removed = shard === null ? [] : [...shard.tools.keys()].filter((n) => !counts.has(n)).sort(compareCodePoints);
@@ -252,20 +264,22 @@ export interface CallGateOptions {
 /**
  * Per-connection allow-list. `record` replaces the decision only when a
  * complete listing has been checked. A list_changed notification does not
- * touch it. While a listing is being collected (`beginListing` until
- * `record` or `markUnreachable`) every call is refused with `no-listing`, so
- * nothing is called on the strength of a listing that is being replaced.
+ * touch it. While a listing is in progress (section 9.2.1: `beginListing`
+ * until `record` or `markUnreachable`) every call is refused with
+ * `no-listing`, so nothing is called on the strength of a listing that is
+ * being replaced.
  *
- * Order of reasons: a listing in progress or no listing at all, then a
- * whole-lock error, then `unreachable`, then `lock-stale`, then the per-name
- * answer.
+ * Order of reasons, as in the reference session (section 9.5): a listing in
+ * progress, then `unreachable` after a failed listing, then `no-listing`
+ * when none has completed, then a whole-lock error, then `lock-stale`, then
+ * the per-name answer.
  */
 export class CallGate {
   #decision: Decision | null = null;
   #snapshotAt = 0;
   #snapshotId: string | null = null;
   #unreachable = false;
-  #collecting = 0;
+  #collecting = false;
   readonly #maxStalenessMs: number;
   readonly #now: () => number;
 
@@ -284,18 +298,18 @@ export class CallGate {
     return this.#snapshotId;
   }
 
-  /** A listing started (its first page is in and more are being fetched). */
+  /** A listing started: the host asked for its first page. */
   beginListing(): void {
-    this.#collecting += 1;
+    this.#collecting = true;
   }
 
-  /** A listing that began ended without a decision (it failed or was dropped). */
+  /** The listing in progress ended without a decision and without failing. */
   endListing(): void {
-    if (this.#collecting > 0) this.#collecting -= 1;
+    this.#collecting = false;
   }
 
   get listingInProgress(): boolean {
-    return this.#collecting > 0;
+    return this.#collecting;
   }
 
   /** Install the decision for the latest complete listing. */
@@ -304,11 +318,13 @@ export class CallGate {
     this.#snapshotId = snapshot.snapshotId;
     this.#snapshotAt = snapshot.loadedAt;
     this.#unreachable = false;
+    this.#collecting = false;
   }
 
   /** The latest listing failed; refuse every call with `unreachable` until one completes. */
   markUnreachable(): void {
     this.#unreachable = true;
+    this.#collecting = false;
   }
 
   get unreachable(): boolean {
@@ -321,11 +337,12 @@ export class CallGate {
   }
 
   check(name: string): "allow" | CallReason {
-    if (this.#collecting > 0) return "no-listing";
-    const decision = this.#decision;
-    if (decision !== null && decision.lockError !== null) return decision.lockError;
+    if (this.#collecting) return "no-listing";
     if (this.#unreachable) return "unreachable";
-    if (decision !== null && this.isStale()) return "lock-stale";
+    const decision = this.#decision;
+    if (decision === null) return "no-listing";
+    if (decision.lockError !== null) return decision.lockError;
+    if (this.isStale()) return "lock-stale";
     return checkCall(decision, name);
   }
 

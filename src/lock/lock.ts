@@ -579,6 +579,11 @@ export interface ManifestVerifier {
 export interface ReaderConfig {
   readonly requireManifest?: boolean;
   readonly signer?: SignerIdentity | null;
+  /**
+   * Section 8.2: true when the host keeps a sequence store. Required with a
+   * signer; `lastSequence` is the floor read from it (null when it holds none).
+   */
+  readonly sequenceStore?: boolean;
   readonly lastSequence?: number | null;
   readonly verifier?: ManifestVerifier | null;
 }
@@ -720,6 +725,9 @@ function readLockFiles(dir: DirStamp): Map<string, Buffer> {
 async function verifySignature(files: ReadonlyMap<string, Buffer>, config: ReaderConfig): Promise<boolean> {
   const signer = config.signer ?? null;
   if (signer === null) return false;
+  if (config.sequenceStore !== true) {
+    throw new LockError("lock-signature-invalid", "a signer is configured but the host config names no sequence store");
+  }
   const raw = files.get(MANIFEST);
   if (raw === undefined) throw new LockError("lock-signature-invalid", "signer configured but no MANIFEST.json");
   const bundle = files.get(SIGNATURE);
@@ -1092,8 +1100,9 @@ export function formatShard(shard: Shard): Buffer {
       ordered([
         ["digest", entry.digest],
         ["contract", entry.contract],
-        ...(entry.metaDigest !== undefined ? [["metaDigest", entry.metaDigest] as const] : []),
         ["approval", approvalValue(entry.approval)],
+        // After approval, where the reference generator writes it.
+        ...(entry.metaDigest !== undefined ? [["metaDigest", entry.metaDigest] as const] : []),
       ]),
     ]);
   }

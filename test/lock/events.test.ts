@@ -74,7 +74,7 @@ test("a guarded session emits listing and refusal events with no leaked text", a
       Object.keys(listing).sort(),
       ["counts", "host", "id", "instructions", "lockError", "posture", "removed", "schema", "server", "snapshotId", "time", "tools", "type"],
     );
-    for (const t of listing.tools) assert.deepEqual(Object.keys(t).sort(), ["approved", "decision", "name", "reason", "served"]);
+    for (const t of listing.tools) assert.deepEqual(Object.keys(t).sort(), ["approved", "decision", "meta", "name", "reason", "served"]);
     const refusal = events[1];
     assert.ok(refusal?.type === "refusal");
     assert.deepEqual([refusal.tool, refusal.reason], ["exfil", "new-tool"]);
