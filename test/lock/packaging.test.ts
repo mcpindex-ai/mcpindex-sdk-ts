@@ -62,3 +62,30 @@ test("the package resolves its own subpaths", async () => {
   assert.equal(typeof pg.PgLockStore, "function");
   assert.equal(typeof pg.MIGRATION_SQL, "string");
 });
+
+test("subpath ./ai: types and import entries, @ai-sdk/mcp an optional peer, engines floor unchanged", () => {
+  assert.deepEqual(pkg.exports["./ai"], { types: "./dist/src/ai.d.ts", import: "./dist/src/ai.js" });
+  assert.equal(pkg.peerDependenciesMeta?.["@ai-sdk/mcp"]?.optional, true);
+  assert.ok(typeof pkg.peerDependencies["@ai-sdk/mcp"] === "string");
+  assert.match(pkg.devDependencies["@ai-sdk/mcp"], /^\d+\.\d+\.\d+$/);
+  assert.match(pkg.devDependencies.ai, /^\d+\.\d+\.\d+$/);
+  assert.equal(pkg.engines.node, ">=20");
+  assert.equal(pkg.dependencies, undefined);
+});
+
+test("compiled ai module imports only relative modules at runtime, and is on the ship allowlist", () => {
+  const text = readFileSync(join(ROOT, "dist", "src", "ai.js"), "utf8");
+  for (const m of text.matchAll(/^import\s[^;]*?from\s+"([^"]+)"/gm)) {
+    assert.ok((m[1] as string).startsWith("./"), `ai.js imports ${m[1]}`);
+  }
+  const allow = new Set((JSON.parse(readFileSync(join(ROOT, "scripts", "ship-allowlist.json"), "utf8")) as { allow: string[] }).allow);
+  for (const ext of [".js", ".js.map", ".d.ts", ".d.ts.map"]) assert.ok(allow.has(`dist/src/ai${ext}`), `missing dist/src/ai${ext}`);
+  const index = readFileSync(join(ROOT, "dist", "src", "index.js"), "utf8");
+  assert.ok(!/\.\/ai\.js/.test(index));
+});
+
+test("the package resolves @mcp-index/sdk/ai", async () => {
+  const ai = (await import("@mcp-index/sdk/ai")) as Record<string, unknown>;
+  assert.equal(typeof ai.lockTransport, "function");
+  assert.equal(typeof ai.AiLockTransport, "function");
+});

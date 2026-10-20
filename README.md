@@ -174,6 +174,35 @@ When enabled, each tool you pin and each contract drift sends **one one-way sign
 opt-in richer tier (it behaves identically today). The full notice is exported as
 `DRIFT_TELEMETRY_NOTICE`. Unset the variable any time to stop.
 
+## Lock mode for the Vercel AI SDK (`@mcp-index/sdk/ai`)
+
+Wrap the transport you hand to `createMCPClient` from `@ai-sdk/mcp` (an optional peer). The
+wrapper reads the raw `tools/list` exchange, checks every tool against your mcp.lock, and the
+client only ever sees approved tools, through `tools()` or `listTools()` alike:
+
+```ts
+import { lockTransport } from "@mcp-index/sdk/ai";
+const transport = lockTransport(inner, { store, identity, posture: "guard" });
+const client = await createMCPClient({ transport });
+```
+
+A call to a withheld or unlisted tool never reaches the server. `callTool()` and the tool's
+`execute()` reject with an `MCPClientError` whose `code` is -32011 and `data.reason` says why;
+inside `generateText` that shows up as a `tool-error` part.
+
+Limits:
+
+- A digest says whether the contract changed. It says nothing about what the server does
+  when a tool runs.
+- The AI SDK client does not refetch on `notifications/tools/list_changed`. After an approval
+  or a server change, call `tools()` again; until then the previous allow-list holds.
+- `@ai-sdk/mcp` needs Node >= 22, so this subpath does too. The rest of the package still runs
+  on Node 20.
+- The AI SDK's own transports reject any message carrying a `__proto__` key before the wrapper
+  sees it, so such a listing never arrives and nothing is callable. The official SDK transports
+  pass it through and the lock withholds the tool. Instructions given to the client as
+  `initialInitializeResult` never cross the transport and are not checked.
+
 ## Related packages
 
 Three ways to bring mcpindex into an agent, for different surfaces:
