@@ -16,10 +16,12 @@
  *   - classifies every frame from the server as section 9.2.2 says
  *     (classifyFrame): only the response to an unanswered `tools/list`,
  *     matched by id with exact JSON type and value, can carry tools, and only
- *     that or the `initialize` response can carry instructions. Anything else
- *     that carries them, or has both a method and a result or error, is
- *     dropped and reported to onerror; a client request it matched is
- *     answered with an error. A response whose id matches no request is
+ *     that or the `initialize` or `server/discover` response can carry
+ *     instructions. Anything else that carries them, or has both a method and
+ *     a result or error, is dropped and reported to onerror. A client request
+ *     whose id it matches is answered with an error under that id and is no
+ *     longer pending; when that request is the listing's, or one of its page
+ *     requests, the listing fails. A response whose id matches no request is
  *     dropped too;
  *   - follows `nextCursor` itself, sending its own page requests under private
  *     ids, so one listing is every page (section 9.2). The client gets one
@@ -44,8 +46,8 @@
  * that fails (an error response, a result with no tools array, a page that
  * cannot be requested or gets no response, a page or tool limit exceeded)
  * refuses every call with `unreachable` until a listing completes (section
- * 9.5). Server instructions arrive in the initialize result; they are checked
- * there and stripped when the check says so.
+ * 9.5). Server instructions arrive in the initialize or server/discover
+ * result; they are checked there and stripped when the check says so.
  *
  * Unanswered requests are tracked in bounded maps. An entry leaves on its
  * response, on the client's notifications/cancelled, after REQUEST_TTL_MS, or,
@@ -123,15 +125,18 @@ export function idMatches(id: unknown, ids: readonly unknown[]): boolean {
   return key !== null && ids.some((i) => idKey(i) === key);
 }
 
+/** Requests whose response may carry instructions (section 9.2.2). */
+export const HANDSHAKE_METHODS: readonly string[] = Object.freeze(["initialize", "server/discover"]);
+
 export type FrameKind = "listing" | "handshake" | "drop" | "relay";
 
 /**
  * What the host does with one frame from the server (section 9.2.2):
  * `listing` (a page of the listing whose request it answers), `handshake`
- * (the initialize response; its instructions are checked), `drop`, or
- * `relay`. `isInflight` and `isHandshake` say whether an id matches an
- * unanswered tools/list or initialize request; unanswered tools/list
- * requests are matched first.
+ * (the initialize or server/discover response; its instructions are
+ * checked), `drop`, or `relay`. `isInflight` and `isHandshake` say whether an
+ * id matches an unanswered tools/list or handshake request; unanswered
+ * tools/list requests are matched first.
  */
 export function classifyFrame(
   frame: unknown,
@@ -436,7 +441,8 @@ export class LockedTransport implements Transport {
 
   #isHandshake(id: unknown): boolean {
     const key = idKey(id);
-    return key !== null && this.#outstanding.get(key)?.value === "initialize";
+    const method = key === null ? undefined : this.#outstanding.get(key)?.value;
+    return method !== undefined && HANDSHAKE_METHODS.includes(method);
   }
 
   async #incoming(message: unknown, extra?: MessageExtraInfo): Promise<void> {
