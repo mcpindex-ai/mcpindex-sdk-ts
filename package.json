@@ -19,6 +19,14 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
+    },
+    "./lock": {
+      "types": "./dist/src/lock/index.d.ts",
+      "import": "./dist/src/lock/index.js"
+    },
+    "./lock/pg": {
+      "types": "./dist/src/lock/pg.d.ts",
+      "import": "./dist/src/lock/pg.js"
     }
   },
   "files": [
@@ -49,11 +57,22 @@
     "agent"
   ],
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.0.0 <2"
+    "@modelcontextprotocol/sdk": ">=1.0.0 <2",
+    "pg": "^8.11.0",
+    "sigstore": "^4.1.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
+    "sigstore": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.9.1",
+    "pg": "^8.23.1",
     "typescript": "^6.0.3"
   }
 }
