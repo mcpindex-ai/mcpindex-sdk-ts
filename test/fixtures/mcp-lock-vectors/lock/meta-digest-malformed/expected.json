@@ -1,0 +1,17 @@
+{
+  "lockError": "lock-unreadable",
+  "shown": [],
+  "withheld": {
+    "search": "lock-unreadable",
+    "fetch": "lock-unreadable"
+  },
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": true,
+  "calls": {
+    "search": "lock-unreadable",
+    "fetch": "lock-unreadable"
+  },
+  "meta": {}
+}

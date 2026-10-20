@@ -24,5 +24,6 @@
     "fetch": "allow",
     "count": "allow",
     "archive": "allow"
-  }
+  },
+  "meta": {}
 }

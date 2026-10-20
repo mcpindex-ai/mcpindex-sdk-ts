@@ -1,0 +1,10 @@
+{
+  "posture": "guard",
+  "signer": {
+    "issuer": "https://token.actions.githubusercontent.com",
+    "san": "https://github.com/example/lock/.github/workflows/sign.yml@refs/heads/main"
+  },
+  "sequenceStore": true,
+  "lastSequence": 5,
+  "testVerifier": "accept-any"
+}

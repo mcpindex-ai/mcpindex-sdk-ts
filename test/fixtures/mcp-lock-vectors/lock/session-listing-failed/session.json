@@ -1,0 +1,52 @@
+{
+  "steps": [
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-fail"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "list-changed"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    }
+  ]
+}

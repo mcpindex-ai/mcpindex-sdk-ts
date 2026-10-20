@@ -178,5 +178,17 @@
   "duplicate-key-last-value": {
     "expected": "sha256:4c7994c96b1b7bbb776b3a05e642d8ab5c8431e516b095618791aa1a95ec9a90",
     "note": "What duplicate-key-last-wins parses to."
+  },
+  "depth-512-has-digest": {
+    "expected": "sha256:450e6b0700c2d5364778bd9982539fc3cafdeea46e9be48d4928a527ce6a2704",
+    "note": "The innermost value sits at depth 512, the deepest that gets a digest."
+  },
+  "depth-513-no-digest": {
+    "expected": null,
+    "note": "One level deeper than depth-512-has-digest: no digest."
+  },
+  "depth-in-top-meta-ignored": {
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "note": "Deep nesting inside the removed top-level _meta does not affect the digest."
   }
 }

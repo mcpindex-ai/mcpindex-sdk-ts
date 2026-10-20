@@ -1,0 +1,36 @@
+{
+  "lockVersion": "1-draft",
+  "identity": {
+    "kind": "remote",
+    "url": "https://mcp.example.com/v1/mcp"
+  },
+  "attributes": {
+    "version": "1.4.0",
+    "env": [
+      "DOCS_TOKEN"
+    ]
+  },
+  "tools": {
+    "search": {
+      "digest": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+      "contract": "sha256-bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      },
+      "metaDigest": "sha256:bd3c074e6b4e9061c177fea06937dc4e259400c41ecfaab9ac745997ee86afca"
+    },
+    "fetch": {
+      "digest": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+      "contract": "sha256-f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    }
+  }
+}

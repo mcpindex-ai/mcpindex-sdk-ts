@@ -15,5 +15,6 @@
     "search": "allow",
     "fetch": "allow",
     "count": "no-digest"
-  }
+  },
+  "meta": {}
 }

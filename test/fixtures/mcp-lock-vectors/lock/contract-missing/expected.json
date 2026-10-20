@@ -12,5 +12,6 @@
   "calls": {
     "search": "contract-mismatch",
     "fetch": "contract-mismatch"
-  }
+  },
+  "meta": {}
 }

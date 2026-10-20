@@ -13,5 +13,6 @@
   "calls": {
     "search": "duplicate-name",
     "fetch": "allow"
-  }
+  },
+  "meta": {}
 }

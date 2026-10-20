@@ -12,5 +12,6 @@
   "calls": {
     "search": "lock-signature-invalid",
     "fetch": "lock-signature-invalid"
-  }
+  },
+  "meta": {}
 }

@@ -15,5 +15,6 @@
     "search": "allow",
     "fetch": "allow",
     "delete_page": "new-tool"
-  }
+  },
+  "meta": {}
 }

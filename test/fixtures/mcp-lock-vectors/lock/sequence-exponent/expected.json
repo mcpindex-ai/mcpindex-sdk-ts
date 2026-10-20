@@ -12,5 +12,6 @@
   "calls": {
     "search": "lock-unreadable",
     "fetch": "lock-unreadable"
-  }
+  },
+  "meta": {}
 }

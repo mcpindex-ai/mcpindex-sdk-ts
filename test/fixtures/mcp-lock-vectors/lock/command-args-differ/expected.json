@@ -12,5 +12,6 @@
   "calls": {
     "search": "unlocked-server",
     "fetch": "unlocked-server"
-  }
+  },
+  "meta": {}
 }

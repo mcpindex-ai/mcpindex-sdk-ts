@@ -1,7 +1,12 @@
 /**
- * mcp.lock draft 1 vectors, vendored from mcp-tool-pinning tag vectors-draft-1b
- * (1f38955) into test/fixtures/mcp-lock-vectors. SHA256SUMS is pinned below;
- * every vendored file must match it, so the vectors cannot drift silently.
+ * mcp.lock draft 1c vectors, vendored from mcp-tool-pinning tag vectors-draft-1c
+ * (eccdc4c) into test/fixtures/mcp-lock-vectors with `git archive`. SHA256SUMS
+ * is pinned below; every vendored file must match it, so the vectors cannot
+ * drift silently.
+ *
+ * Lock cases load through FileLockStore with the case's host config. Session
+ * cases (session.json) drive a LockedTransport over a scripted server, so the
+ * adapter itself is what answers each call. Frame cases run classifyFrame.
  *
  * Each group counts its cases and the last test checks the total, so a vector
  * that is skipped by mistake fails the run.
@@ -36,17 +41,23 @@ import {
 } from "../../src/lock/lock.js";
 import type { Identity, Lock, Posture } from "../../src/lock/lock.js";
 import { checkCall, checkListing } from "../../src/lock/check.js";
+import { LockedTransport, classifyFrame, idMatches } from "../../src/lock/rawList.js";
+import type { FrameKind } from "../../src/lock/rawList.js";
+import { FileLockStore } from "../../src/lock/store.js";
+import type { SequenceStore } from "../../src/lock/store.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const VECTORS = join(ROOT, "test", "fixtures", "mcp-lock-vectors");
-const SUMS_SHA256 = "cd2447cb03db6e89875b74a2f9ef017b5f72f54b8544c0c0dc64c3e18f3880cc";
+const SUMS_SHA256 = "5ae51a9a697ef55c7d2fd71e4a00734e2b50f57324d3493b222dde1cb0447710";
 
 const sha256 = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(VECTORS, rel), "utf8"));
 
-const counts = { tools: 0, raw: 0, identity: 0, lock: 0, contracts: 0 };
+const counts = { tools: 0, raw: 0, identity: 0, lock: 0, sessions: 0, frames: 0, contracts: 0 };
 
-test("SHA256SUMS is the pinned vectors-draft-1b file and covers every vendored file", () => {
+test("SHA256SUMS is the pinned vectors-draft-1c file and covers every vendored file", () => {
   const sums = readFileSync(join(VECTORS, "SHA256SUMS"));
   assert.equal(sha256(sums), SUMS_SHA256);
   const listed = new Map<string, string>();
@@ -92,7 +103,7 @@ test("digest/*.json: raw text through JSON.parse", () => {
     assert.equal(got, expected, name);
     counts.raw++;
   }
-  assert.equal(counts.raw, 45);
+  assert.equal(counts.raw, 48);
 });
 
 test("identity.json: normalization, key, h16, slug, filename", () => {
@@ -142,27 +153,47 @@ function materialize(name: string, tmp: string): string {
   return root;
 }
 
+interface CaseConfig {
+  posture: Posture;
+  requireManifest?: boolean;
+  signer?: { issuer: string; san: string };
+  sequenceStore?: boolean;
+  lastSequence?: number;
+  maxStaleness?: number;
+  testVerifier?: "accept-any";
+}
+
+/** The case's host config as a FileLockStore. `clock` is read for loadedAt. */
+function storeFor(root: string, config: CaseConfig, clock: () => number): FileLockStore {
+  let stored: number | null = config.lastSequence ?? null;
+  const sequenceStore: SequenceStore | undefined =
+    config.sequenceStore === true
+      ? {
+          read: () => stored,
+          write: (n: number) => {
+            stored = n;
+          },
+        }
+      : undefined;
+  return new FileLockStore({
+    root,
+    requireManifest: config.requireManifest ?? false,
+    signer: config.signer ?? null,
+    // accept-any exists only in test runners; without it a signer fails closed.
+    verifier: config.testVerifier === "accept-any" ? { verify: async () => true } : null,
+    ...(sequenceStore !== undefined ? { sequenceStore } : {}),
+    now: clock,
+  });
+}
+
 async function runCase(root: string): Promise<Record<string, unknown>> {
-  const config = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as Record<string, unknown>;
+  const config = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as CaseConfig;
   const identity = JSON.parse(readFileSync(join(root, "server.json"), "utf8")) as Identity;
-  let lock: Lock | LockError;
-  try {
-    lock = (
-      await loadLock(root, {
-        requireManifest: (config.requireManifest as boolean | undefined) ?? false,
-        signer: (config.signer as { issuer: string; san: string } | undefined) ?? null,
-        lastSequence: (config.lastSequence as number | undefined) ?? null,
-        // No verifier: a configured signer must then fail closed.
-      })
-    ).lock;
-  } catch (exc) {
-    assert.ok(exc instanceof LockError, String(exc));
-    lock = exc;
-  }
+  const lock: Lock | LockError = (await storeFor(root, config, () => 0).loadSnapshot()).lock;
   const expected = JSON.parse(readFileSync(join(root, "expected.json"), "utf8")) as { calls: Record<string, string> };
   const listingPath = join(root, "listing.json");
   const decision = existsSync(listingPath)
-    ? checkListing(lock, identity, JSON.parse(readFileSync(listingPath, "utf8")), config.posture as Posture)
+    ? checkListing(lock, identity, JSON.parse(readFileSync(listingPath, "utf8")), config.posture)
     : null;
   const calls: Record<string, string> = {};
   for (const name of Object.keys(expected.calls)) calls[name] = checkCall(decision, name);
@@ -175,7 +206,93 @@ async function runCase(root: string): Promise<Record<string, unknown>> {
     instructions: decision ? decision.instructions : null,
     stripInstructions: decision ? decision.stripInstructions : false,
     calls,
+    meta: decision ? Object.fromEntries([...decision.meta].map(([k, v]) => [k, { relay: v.relay, flag: v.flag }])) : {},
   };
+}
+
+/** A server that answers only when a session step tells it to. */
+class ScriptedServer implements Transport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: <T extends JSONRPCMessage>(message: T) => void;
+  readonly sent: Array<Record<string, unknown>> = [];
+  async start(): Promise<void> {}
+  async send(m: JSONRPCMessage): Promise<void> {
+    this.sent.push(m as unknown as Record<string, unknown>);
+  }
+  async close(): Promise<void> {}
+  frame(message: Record<string, unknown>): void {
+    this.onmessage?.(message as unknown as JSONRPCMessage);
+  }
+}
+
+type Step = { op: string; listing?: string; advance?: number; path?: string; text?: string; tool?: string; expect?: string };
+
+/** Run session.json against a LockedTransport. Returns every call whose verdict differs. */
+async function runSession(root: string): Promise<string[]> {
+  const config = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as CaseConfig;
+  const identity = JSON.parse(readFileSync(join(root, "server.json"), "utf8")) as Identity;
+  const { steps } = JSON.parse(readFileSync(join(root, "session.json"), "utf8")) as { steps: Step[] };
+  let clock = 0;
+  const server = new ScriptedServer();
+  const locked = new LockedTransport(server, {
+    store: storeFor(root, config, () => clock),
+    identity,
+    posture: config.posture,
+    ...(config.maxStaleness !== undefined ? { maxStalenessMs: config.maxStaleness * 1000 } : {}),
+    now: () => clock,
+  });
+  const delivered = new Map<unknown, Record<string, unknown>>();
+  const waiters = new Map<unknown, () => void>();
+  locked.onmessage = (m) => {
+    const msg = m as unknown as Record<string, unknown>;
+    delivered.set(msg.id, msg);
+    waiters.get(msg.id)?.();
+  };
+  const answered = (id: unknown): Promise<void> =>
+    delivered.has(id) ? Promise.resolve() : new Promise<void>((res) => waiters.set(id, res));
+  await locked.start();
+  let seq = 0;
+  let listId: string | null = null;
+  const mismatches: string[] = [];
+  for (const [index, step] of steps.entries()) {
+    if (step.op === "list-start") {
+      listId = `list-${++seq}`;
+      await locked.send({ jsonrpc: "2.0", id: listId, method: "tools/list" } as JSONRPCMessage);
+    } else if (step.op === "list-complete" || step.op === "list-fail") {
+      assert.ok(listId !== null, `step ${index}: no listing started`);
+      const id = listId;
+      if (step.op === "list-complete") {
+        const listing = JSON.parse(readFileSync(join(root, step.listing as string), "utf8")) as { tools: unknown[] };
+        server.frame({ jsonrpc: "2.0", id, result: { tools: listing.tools } });
+      } else {
+        server.frame({ jsonrpc: "2.0", id, error: { code: -32603, message: "listing failed" } });
+      }
+      await answered(id);
+    } else if (step.op === "list-changed") {
+      server.frame({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      await new Promise((res) => setImmediate(res));
+    } else if (step.op === "clock") {
+      clock += (step.advance as number) * 1000;
+    } else if (step.op === "write") {
+      writeFileSync(join(root, step.path as string), step.text as string, "utf8");
+    } else if (step.op === "call") {
+      const id = `call-${++seq}`;
+      const before = server.sent.length;
+      await locked.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: step.tool, arguments: {} } } as JSONRPCMessage);
+      let got: string;
+      if (server.sent.length > before && server.sent[server.sent.length - 1]?.id === id) {
+        got = "allow";
+      } else {
+        await answered(id);
+        got = String(((delivered.get(id)?.error as { data?: { reason?: string } } | undefined)?.data?.reason) ?? "?");
+      }
+      if (got !== step.expect) mismatches.push(`step ${index}: call ${String(step.tool)} gave ${got}, expected ${String(step.expect)}`);
+    } else {
+      throw new Error(`unknown session op ${step.op}`);
+    }
+  }
+  return mismatches;
 }
 
 test("lock/*: every case gives the expected outcome", async () => {
@@ -189,12 +306,32 @@ test("lock/*: every case gives the expected outcome", async () => {
       const root = materialize(name, tmp);
       const expected = JSON.parse(readFileSync(join(root, "expected.json"), "utf8")) as unknown;
       assert.deepEqual(await runCase(root), expected, name);
+      if (existsSync(join(root, "session.json"))) {
+        assert.deepEqual(await runSession(root), [], name);
+        counts.sessions++;
+      }
       counts.lock++;
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-  assert.equal(counts.lock, 46);
+  assert.equal(counts.lock, 59);
+  assert.equal(counts.sessions, 4);
+});
+
+test("frames.json: what the adapter does with each server frame (section 9.2.2)", () => {
+  const cases = readJson("frames.json") as Array<{ name: string; inflight: unknown[]; handshake?: unknown; frame: unknown; expect: FrameKind }>;
+  for (const c of cases) {
+    const handshake = c.handshake === undefined ? [] : [c.handshake];
+    const got = classifyFrame(
+      c.frame,
+      (id) => idMatches(id, c.inflight),
+      (id) => idMatches(id, handshake),
+    );
+    assert.equal(got, c.expect, c.name);
+    counts.frames++;
+  }
+  assert.equal(counts.frames, 21);
 });
 
 test("contract files are RFC 8785 text of themselves", () => {
@@ -276,6 +413,7 @@ function toWriter(v: unknown): W {
 }
 
 test("vector totals", () => {
-  // tools 42 + raw 45 + identity 29 + lock 46 = 162 decision vectors, plus contracts.
-  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock, 162);
+  // tools 42 + raw 48 + identity 29 + lock 59 + frames 21 = 199 vectors (4 of the
+  // lock cases also run a session), plus contracts.
+  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock + counts.frames, 199);
 });

@@ -4,5 +4,7 @@
     "issuer": "https://token.actions.githubusercontent.com",
     "san": "https://github.com/example/lock/.github/workflows/sign.yml@refs/heads/main"
   },
-  "lastSequence": 5
+  "sequenceStore": true,
+  "lastSequence": 5,
+  "testVerifier": "accept-any"
 }

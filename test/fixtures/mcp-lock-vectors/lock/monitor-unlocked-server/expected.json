@@ -12,5 +12,6 @@
   "stripInstructions": false,
   "calls": {
     "search": "allow"
-  }
+  },
+  "meta": {}
 }

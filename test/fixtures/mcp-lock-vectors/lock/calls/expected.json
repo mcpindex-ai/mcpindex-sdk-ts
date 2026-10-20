@@ -14,5 +14,6 @@
     "search": "allow",
     "fetch": "upstream-changed",
     "delete_page": "not-listed"
-  }
+  },
+  "meta": {}
 }

@@ -1,0 +1,94 @@
+{
+  "steps": [
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "call",
+      "tool": "fetch",
+      "expect": "allow"
+    },
+    {
+      "op": "list-changed"
+    },
+    {
+      "op": "call",
+      "tool": "fetch",
+      "expect": "allow"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "call",
+      "tool": "fetch",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-changed"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-2.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "call",
+      "tool": "fetch",
+      "expect": "upstream-changed"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "fetch",
+      "expect": "allow"
+    }
+  ]
+}

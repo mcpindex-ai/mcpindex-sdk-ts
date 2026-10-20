@@ -9,5 +9,6 @@
   "calls": {
     "search": "no-listing",
     "fetch": "no-listing"
-  }
+  },
+  "meta": {}
 }

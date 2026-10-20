@@ -14,5 +14,6 @@
   "calls": {
     "search": "allow",
     "fetch": "allow"
-  }
+  },
+  "meta": {}
 }
