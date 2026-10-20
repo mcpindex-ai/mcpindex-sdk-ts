@@ -1,0 +1,1 @@
+{"name": "summarize", "description": "Summarize text.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "maximum": 9007199254740991.0}}

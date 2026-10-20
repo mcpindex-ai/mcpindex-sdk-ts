@@ -1,0 +1,1 @@
+{"description":"Search the docs.","inputSchema":{"properties":{"q":{"type":"string"}},"required":["q"],"type":"object"},"name":"search"}

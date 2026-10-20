@@ -1,0 +1,22 @@
+{
+  "name": "summarize",
+  "description": "Summarize text.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "examples": [
+      0.1,
+      -0.0,
+      1e-07,
+      123456789012345,
+      1000000000000000.0
+    ]
+  }
+}

@@ -174,6 +174,184 @@ When enabled, each tool you pin and each contract drift sends **one one-way sign
 opt-in richer tier (it behaves identically today). The full notice is exported as
 `DRIFT_TELEMETRY_NOTICE`. Unset the variable any time to stop.
 
+## Lock mode (`@mcp-index/sdk/lock`)
+
+Lock mode checks every `tools/list` against an mcp.lock kept in your repository
+(`.mcp/lock/` and `.mcp/contracts/`, format: mcp.lock draft 1, revision 1e). The model sees
+only tools whose definition digest matches an approval, and a call to anything else is
+refused with JSON-RPC error -32011 before it reaches the server. Lock mode is opt-in and
+draft 1 is not stable. Nothing here runs unless you construct it, and the root
+`@mcp-index/sdk` import does not load it.
+
+Connect the official MCP client through `lockClient`:
+
+```ts
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { FileLockStore, lockClient } from "@mcp-index/sdk/lock";
+import type { Identity } from "@mcp-index/sdk/lock";
+
+const identity: Identity = { kind: "stdio", package: "npm:@example/docs-server" };
+const store = new FileLockStore({ root: process.cwd() }); // the directory that holds .mcp/
+const client = new Client({ name: "my-host", version: "1.0.0" });
+const transport = new StdioClientTransport({ command: "npx", args: ["-y", "@example/docs-server"] });
+const locked = await lockClient(client, transport, { store, identity, posture: "guard" });
+
+const { tools } = await client.listTools(); // approved tools only
+console.log(tools.map((t) => t.name), locked.decision?.withheld);
+```
+
+`posture` is `monitor` (show everything, report what does not match), `guard` (withhold it)
+or `strict` (same as guard in draft 1). Lock mode never approves a tool on first sight and
+never re-pins. The lock changes only through `store.approve` and `store.revoke`, or a
+reviewed edit to the lock files:
+
+```ts
+import { readFileSync } from "node:fs";
+
+// The Tool object exactly as the server sent it, saved for review. Not an SDK-parsed copy:
+// the SDK drops members it does not know, and the digest covers every member.
+const tool: unknown = JSON.parse(readFileSync("review/search.json", "utf8"));
+await store.approve({ identity, tool, subject: "github:you", via: "api", ref: "pr-42" });
+```
+
+The identity names the server, in one of three forms:
+
+```ts
+const remote: Identity = { kind: "remote", url: "https://mcp.example.com/v1/mcp" };
+const pkg: Identity = { kind: "stdio", package: "npm:@example/docs-server" }; // npm, pypi or oci
+const cmd: Identity = { kind: "stdio", command: "uvx", args: ["git+https://github.com/example/server"] };
+```
+
+`remoteIdentity`, `packageIdentity` and `commandIdentity` build them in normalized form.
+`commandIdentity` throws when an argument looks like a credential.
+
+A signed lock verifies `.mcp/lock/MANIFEST.json.sigstore` against a signer from your host
+configuration. It needs the optional `sigstore` peer, a trust root file, and a sequence file
+where the host keeps the highest manifest sequence it accepted, so an older signed manifest
+is refused after a newer one:
+
+```ts
+const signed = new FileLockStore({
+  root: "/srv/app",
+  signer: {
+    issuer: "https://token.actions.githubusercontent.com",
+    san: "https://github.com/acme/app/.github/workflows/lock.yml@refs/heads/main",
+  },
+  trustedRootPath: "/etc/mcplock/trusted_root.json",
+  sequencePath: "/var/lib/mcplock/sequence",
+});
+```
+
+Both paths must lie outside the repository that holds the lock, or the constructor throws
+`HostConfigError`. The repository is the nearest directory at or above `root` with a `.git`
+directory or a linked worktree's `.git` file; a submodule's `.git` file sends the search on to
+the superproject. The check compares directories by device and inode, so a case-folded
+spelling on macOS and a symlink followed by `..` are judged where they land, and a `..` in the
+part of a path that does not exist yet is refused. When no `.git` entry exists at or above
+`root`, only `root` itself is protected: a path beside it in the same untracked directory is
+accepted, so keep host files somewhere the lock's writers cannot reach. A signer without a sequence store makes every load
+`lock-signature-invalid`.
+
+## Postgres lock store (`@mcp-index/sdk/lock/pg`)
+
+`PgLockStore` keeps approvals in Postgres instead of files: append-only, hash-chained
+records per tenant, with row-level security on both tables. `pg` is an optional peer.
+
+The schema owner runs the migrations once. They are exported as SQL text:
+
+```ts
+import { writeFileSync } from "node:fs";
+import { MIGRATION_SQL, ROLE_BOUND_SQL, ROLE_SQL } from "@mcp-index/sdk/lock/pg";
+
+writeFileSync("mcplock-schema.sql", MIGRATION_SQL + ROLE_SQL);
+writeFileSync("mcplock-role-bound.sql", ROLE_BOUND_SQL); // only for role-bound tenancy
+// psql -v ON_ERROR_STOP=1 -f mcplock-schema.sql
+```
+
+`ROLE_SQL` creates two roles without login. `mcplock_runtime` may only read, and is what hosts
+in lock mode connect as. `mcplock_approver` may also append records and move the head, and
+belongs to the approval path only. Neither may update or delete a record. Grant each to its
+own login, and never connect as a superuser, since a superuser bypasses row-level security:
+
+```sql
+GRANT mcplock_runtime TO host_login;
+GRANT mcplock_approver TO approver_login;
+```
+
+Two tenancy modes:
+
+- `app-scoped` (the default, `MIGRATION_SQL` alone). The store sets the tenant from the
+  principal at the start of each transaction. This stops a query bug from reaching another
+  tenant. It does not stop someone holding a shared login, who can set any tenant.
+- `role-bound` (`ROLE_BOUND_SQL` after the other two). Each tenant gets its own logins, and
+  the administrator maps each login to its tenant in `mcplock.tenant_logins`. The policies
+  read the tenant from the login, so a login reaches only its own tenant. Use this before
+  sharing one database between tenants that do not trust each other.
+
+```ts
+import { PgLockStore, createPgPool } from "@mcp-index/sdk/lock/pg";
+
+const pool = await createPgPool(process.env.MCPLOCK_PG_URL ?? "postgres://host_login@127.0.0.1/app");
+const store = new PgLockStore({
+  pool,
+  principal: { tenantId: "acme", subject: "svc:docs-host" }, // from your own auth, never a header
+  tenancy: "app-scoped",
+});
+const snapshot = await store.loadSnapshot();
+console.log(snapshot.snapshotId);
+```
+
+With `headVerifier` set, each load checks a signature over the head row, and the store must
+also get a `sequenceStore`, for example `fileSequenceStore("/var/lib/mcplock/pg-sequence")`
+from `@mcp-index/sdk/lock`, or every load is `lock-signature-invalid`. Without a head
+signature, whoever can write the tables can rewrite the chain. Errors never carry the
+connection string unredacted.
+
+## Lock mode for the Vercel AI SDK (`@mcp-index/sdk/ai`)
+
+Wrap the transport you hand to `createMCPClient` from `@ai-sdk/mcp` (an optional peer). The
+wrapper reads the raw `tools/list` exchange, checks every tool against your mcp.lock, and the
+client only ever sees approved tools, through `tools()` or `listTools()` alike:
+
+```ts
+import { createMCPClient } from "@ai-sdk/mcp";
+import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
+import { lockTransport } from "@mcp-index/sdk/ai";
+import { FileLockStore } from "@mcp-index/sdk/lock";
+import type { Identity } from "@mcp-index/sdk/lock";
+
+const identity: Identity = { kind: "stdio", package: "npm:@example/docs-server" };
+const store = new FileLockStore({ root: process.cwd() });
+const inner = new Experimental_StdioMCPTransport({ command: "npx", args: ["-y", "@example/docs-server"] });
+const transport = lockTransport(inner, { store, identity, posture: "guard" });
+const client = await createMCPClient({ transport });
+const tools = await client.tools(); // approved tools only
+console.log(Object.keys(tools));
+```
+
+A call to a withheld or unlisted tool never reaches the server. `callTool()` and the tool's
+`execute()` reject with an `MCPClientError` whose `code` is -32011 and `data.reason` says why;
+inside `generateText` that shows up as a `tool-error` part.
+
+Limits:
+
+- A digest says whether the contract changed. It says nothing about what the server does
+  when a tool runs.
+- The AI SDK client does not refetch on `notifications/tools/list_changed`. After an approval
+  or a server change, call `tools()` again; until then the previous allow-list holds. While a
+  listing is being collected, every call is refused with `no-listing`.
+- A tool's top-level `_meta` is not part of its digest. It reaches the client only when it
+  matches the `metaDigest` recorded at approval; otherwise, under guard, the tool is shown
+  without it and the decision reports `meta-changed` or `meta-unapproved`.
+- `@mcp-index/sdk/ai` imports only types from `@ai-sdk/mcp`, so loading it needs nothing at
+  runtime. The `@ai-sdk/mcp` peer itself needs Node >= 22; that is the only part with that
+  requirement, and the rest of the package runs on Node 20.
+- The AI SDK's own transports reject any message carrying a `__proto__` key before the wrapper
+  sees it, so such a listing never arrives and nothing is callable. The official SDK transports
+  pass it through and the lock withholds the tool. Instructions given to the client as
+  `initialInitializeResult` never cross the transport and are not checked.
+
 ## Related packages
 
 Three ways to bring mcpindex into an agent, for different surfaces:

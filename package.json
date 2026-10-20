@@ -1,6 +1,6 @@
 {
   "name": "@mcp-index/sdk",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "description": "Pre-flight MCP tool-contract drift interceptor from mcpindex.ai, the drift-monitored MCP server index. One-line wrap() over an MCP client session that HOLDs a tool call before your agent runs it when the contract drifted from your pin. No credential handling.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Bhartis LLC",
@@ -19,6 +19,18 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
+    },
+    "./lock": {
+      "types": "./dist/src/lock/index.d.ts",
+      "import": "./dist/src/lock/index.js"
+    },
+    "./lock/pg": {
+      "types": "./dist/src/lock/pg.d.ts",
+      "import": "./dist/src/lock/pg.js"
+    },
+    "./ai": {
+      "types": "./dist/src/ai.d.ts",
+      "import": "./dist/src/ai.js"
     }
   },
   "files": [
@@ -49,11 +61,28 @@
     "agent"
   ],
   "peerDependencies": {
-    "@modelcontextprotocol/sdk": ">=1.0.0 <2"
+    "@ai-sdk/mcp": ">=2.0.74 <3",
+    "@modelcontextprotocol/sdk": ">=1.0.0 <2",
+    "pg": "^8.11.0",
+    "sigstore": "^4.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/mcp": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "sigstore": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@ai-sdk/mcp": "2.0.74",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.9.1",
+    "ai": "7.0.138",
+    "pg": "^8.23.1",
     "typescript": "^6.0.3"
   }
 }

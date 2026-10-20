@@ -1,0 +1,20 @@
+{
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search the docs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "q"
+        ]
+      }
+    }
+  ],
+  "instructions": "Docs server. Call search before fetch."
+}

@@ -1,0 +1,14 @@
+{
+  "lockVersion": "1-draft",
+  "aliases": {
+    "docs": {
+      "kind": "remote",
+      "url": "https://mcp.example.com/v1/mcp"
+    },
+    "evil": {
+      "kind": "stdio",
+      "command": "../../bin/sh",
+      "args": []
+    }
+  }
+}

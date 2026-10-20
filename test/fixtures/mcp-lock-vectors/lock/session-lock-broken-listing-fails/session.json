@@ -1,0 +1,94 @@
+{
+  "steps": [
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-fail"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "write",
+      "path": ".mcp/lock/mcp-example-com-v1-mcp--022711de5f88d01f.json",
+      "text": "{not json\n"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "lock-unreadable"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "no-listing"
+    },
+    {
+      "op": "list-fail"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "lock-unreadable"
+    },
+    {
+      "op": "write",
+      "path": ".mcp/lock/mcp-example-com-v1-mcp--022711de5f88d01f.json",
+      "text": "{\n  \"lockVersion\": \"1-draft\",\n  \"identity\": {\n    \"kind\": \"remote\",\n    \"url\": \"https://mcp.example.com/v1/mcp\"\n  },\n  \"attributes\": {\n    \"version\": \"1.4.0\",\n    \"env\": [\n      \"DOCS_TOKEN\"\n    ]\n  },\n  \"tools\": {\n    \"search\": {\n      \"digest\": \"sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6\",\n      \"contract\": \"sha256-bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6.json\",\n      \"approval\": {\n        \"subject\": \"github:docs-owner\",\n        \"at\": \"2026-10-19T17:00:00Z\",\n        \"via\": \"pr\",\n        \"ref\": \"pr-42\"\n      }\n    },\n    \"fetch\": {\n      \"digest\": \"sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5\",\n      \"contract\": \"sha256-f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5.json\",\n      \"approval\": {\n        \"subject\": \"github:docs-owner\",\n        \"at\": \"2026-10-19T17:00:00Z\",\n        \"via\": \"pr\",\n        \"ref\": \"pr-42\"\n      }\n    }\n  }\n}\n"
+    },
+    {
+      "op": "clock",
+      "advance": 61
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "lock-unreadable"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-complete",
+      "listing": "listing-1.json"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "allow"
+    },
+    {
+      "op": "list-start"
+    },
+    {
+      "op": "list-fail"
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    },
+    {
+      "op": "clock",
+      "advance": 61
+    },
+    {
+      "op": "call",
+      "tool": "search",
+      "expect": "unreachable"
+    }
+  ]
+}

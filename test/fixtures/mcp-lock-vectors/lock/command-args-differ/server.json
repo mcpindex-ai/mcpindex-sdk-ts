@@ -1,0 +1,7 @@
+{
+  "kind": "stdio",
+  "command": "uvx",
+  "args": [
+    "git+https://github.com/example/mcp-server-b"
+  ]
+}

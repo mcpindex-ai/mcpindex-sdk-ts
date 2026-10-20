@@ -1,0 +1,434 @@
+[
+  {
+    "name": "remote-basic",
+    "input": {
+      "url": "https://mcp.example.com/v1/mcp"
+    },
+    "note": "Already normalized.",
+    "identity": {
+      "kind": "remote",
+      "url": "https://mcp.example.com/v1/mcp"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"https://mcp.example.com/v1/mcp\"}",
+    "h16": "022711de5f88d01f",
+    "slug": "mcp-example-com-v1-mcp",
+    "filename": "mcp-example-com-v1-mcp--022711de5f88d01f.json"
+  },
+  {
+    "name": "remote-normalized",
+    "input": {
+      "url": "HTTPS://user:secret@MCP.Example.COM:443/v1/mcp?token=abc#frag"
+    },
+    "note": "Scheme and host lower-cased; userinfo, default port, query and fragment removed.",
+    "identity": {
+      "kind": "remote",
+      "url": "https://mcp.example.com/v1/mcp"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"https://mcp.example.com/v1/mcp\"}",
+    "h16": "022711de5f88d01f",
+    "slug": "mcp-example-com-v1-mcp",
+    "filename": "mcp-example-com-v1-mcp--022711de5f88d01f.json"
+  },
+  {
+    "name": "remote-trailing-slash-kept",
+    "input": {
+      "url": "https://mcp.example.com/v1/mcp/"
+    },
+    "note": "A trailing slash is kept, so this differs from remote-basic.",
+    "identity": {
+      "kind": "remote",
+      "url": "https://mcp.example.com/v1/mcp/"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"https://mcp.example.com/v1/mcp/\"}",
+    "h16": "3f4342a6e4e731ba",
+    "slug": "mcp-example-com-v1-mcp",
+    "filename": "mcp-example-com-v1-mcp--3f4342a6e4e731ba.json"
+  },
+  {
+    "name": "remote-empty-path-kept",
+    "input": {
+      "url": "https://mcp.example.com"
+    },
+    "note": "An empty path stays empty; no slash is added.",
+    "identity": {
+      "kind": "remote",
+      "url": "https://mcp.example.com"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"https://mcp.example.com\"}",
+    "h16": "27db75f27a19fdcf",
+    "slug": "mcp-example-com",
+    "filename": "mcp-example-com--27db75f27a19fdcf.json"
+  },
+  {
+    "name": "remote-nondefault-port",
+    "input": {
+      "url": "http://localhost:8080/mcp"
+    },
+    "note": "A non-default port is kept.",
+    "identity": {
+      "kind": "remote",
+      "url": "http://localhost:8080/mcp"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"http://localhost:8080/mcp\"}",
+    "h16": "3ea2e6ae57f5320d",
+    "slug": "localhost-mcp",
+    "filename": "localhost-mcp--3ea2e6ae57f5320d.json"
+  },
+  {
+    "name": "remote-http-default-port",
+    "input": {
+      "url": "http://Example.com:80/MCP"
+    },
+    "note": "Port 80 removed for http; path case kept.",
+    "identity": {
+      "kind": "remote",
+      "url": "http://example.com/MCP"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"http://example.com/MCP\"}",
+    "h16": "28aeea033f270b9e",
+    "slug": "example-com-mcp",
+    "filename": "example-com-mcp--28aeea033f270b9e.json"
+  },
+  {
+    "name": "remote-ipv6",
+    "input": {
+      "url": "http://[::1]:3000/mcp"
+    },
+    "note": "IPv6 literal keeps its brackets.",
+    "identity": {
+      "kind": "remote",
+      "url": "http://[::1]:3000/mcp"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"http://[::1]:3000/mcp\"}",
+    "h16": "96969dedf8d46ef7",
+    "slug": "1-mcp",
+    "filename": "1-mcp--96969dedf8d46ef7.json"
+  },
+  {
+    "name": "remote-bad-scheme",
+    "input": {
+      "url": "ftp://example.com/mcp"
+    },
+    "note": "Only http and https.",
+    "error": true
+  },
+  {
+    "name": "remote-non-ascii-host",
+    "input": {
+      "url": "https://b\u00fccher.example/mcp"
+    },
+    "note": "The URL must be ASCII; the writer converts the host to an A-label first.",
+    "error": true
+  },
+  {
+    "name": "npm-scoped",
+    "input": {
+      "registry": "npm",
+      "name": "@modelcontextprotocol/server-filesystem"
+    },
+    "note": "npm name as published; slug drops the scope punctuation.",
+    "identity": {
+      "kind": "stdio",
+      "package": "npm:@modelcontextprotocol/server-filesystem"
+    },
+    "key": "{\"kind\":\"stdio\",\"package\":\"npm:@modelcontextprotocol/server-filesystem\"}",
+    "h16": "17b010511e9fc54f",
+    "slug": "modelcontextprotocol-server-filesystem",
+    "filename": "modelcontextprotocol-server-filesystem--17b010511e9fc54f.json"
+  },
+  {
+    "name": "pypi-normalized",
+    "input": {
+      "registry": "pypi",
+      "name": "MCP_Server.Fetch"
+    },
+    "note": "PyPI name normalized as in PEP 503.",
+    "identity": {
+      "kind": "stdio",
+      "package": "pypi:mcp-server-fetch"
+    },
+    "key": "{\"kind\":\"stdio\",\"package\":\"pypi:mcp-server-fetch\"}",
+    "h16": "1f003f9fa9f0c59c",
+    "slug": "mcp-server-fetch",
+    "filename": "mcp-server-fetch--1f003f9fa9f0c59c.json"
+  },
+  {
+    "name": "oci-tag-dropped",
+    "input": {
+      "registry": "oci",
+      "name": "ghcr.io/Example/docs-server:1.4.0"
+    },
+    "note": "OCI: registry and repository, lower case, tag removed (the version is an attribute).",
+    "identity": {
+      "kind": "stdio",
+      "package": "oci:ghcr.io/example/docs-server"
+    },
+    "key": "{\"kind\":\"stdio\",\"package\":\"oci:ghcr.io/example/docs-server\"}",
+    "h16": "5bd2a449e291ad19",
+    "slug": "ghcr-io-example-docs-server",
+    "filename": "ghcr-io-example-docs-server--5bd2a449e291ad19.json"
+  },
+  {
+    "name": "oci-digest-dropped",
+    "input": {
+      "registry": "oci",
+      "name": "localhost:5000/docs@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "note": "OCI digest removed; a registry port stays in the name.",
+    "identity": {
+      "kind": "stdio",
+      "package": "oci:localhost:5000/docs"
+    },
+    "key": "{\"kind\":\"stdio\",\"package\":\"oci:localhost:5000/docs\"}",
+    "h16": "2c2ab7a186da4040",
+    "slug": "localhost-5000-docs",
+    "filename": "localhost-5000-docs--2c2ab7a186da4040.json"
+  },
+  {
+    "name": "unknown-registry",
+    "input": {
+      "registry": "cargo",
+      "name": "mcp-server"
+    },
+    "note": "Registry must be npm, pypi or oci.",
+    "error": true
+  },
+  {
+    "name": "command-basename",
+    "input": {
+      "command": "/usr/local/bin/my-server",
+      "args": []
+    },
+    "note": "Command identity keeps only the basename of the command; no args gives [].",
+    "identity": {
+      "kind": "stdio",
+      "command": "my-server",
+      "args": []
+    },
+    "key": "{\"args\":[],\"command\":\"my-server\",\"kind\":\"stdio\"}",
+    "h16": "d019632e02a7b65d",
+    "slug": "my-server",
+    "filename": "my-server--d019632e02a7b65d.json"
+  },
+  {
+    "name": "command-dotdot",
+    "input": {
+      "command": "..",
+      "args": []
+    },
+    "note": "'..' is not a basename.",
+    "error": true
+  },
+  {
+    "name": "command-args-git-a",
+    "input": {
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/example/mcp-server-a"
+      ]
+    },
+    "note": "Command form carries the args, so this launch ...",
+    "identity": {
+      "kind": "stdio",
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/example/mcp-server-a"
+      ]
+    },
+    "key": "{\"args\":[\"git+https://github.com/example/mcp-server-a\"],\"command\":\"uvx\",\"kind\":\"stdio\"}",
+    "h16": "d8d20577be397047",
+    "slug": "uvx",
+    "filename": "uvx--d8d20577be397047.json"
+  },
+  {
+    "name": "command-args-git-b",
+    "input": {
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/example/mcp-server-b"
+      ]
+    },
+    "note": "... and this one, naming another repository, are two identities.",
+    "identity": {
+      "kind": "stdio",
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/example/mcp-server-b"
+      ]
+    },
+    "key": "{\"args\":[\"git+https://github.com/example/mcp-server-b\"],\"command\":\"uvx\",\"kind\":\"stdio\"}",
+    "h16": "dd00f0bbcbb48876",
+    "slug": "uvx",
+    "filename": "uvx--dd00f0bbcbb48876.json"
+  },
+  {
+    "name": "command-args-paths-verbatim",
+    "input": {
+      "command": "/usr/local/bin/node",
+      "args": [
+        "/srv/mcp/server.js",
+        "--root",
+        "./data"
+      ]
+    },
+    "note": "Only the command is cut to its basename; paths in args are kept as given.",
+    "identity": {
+      "kind": "stdio",
+      "command": "node",
+      "args": [
+        "/srv/mcp/server.js",
+        "--root",
+        "./data"
+      ]
+    },
+    "key": "{\"args\":[\"/srv/mcp/server.js\",\"--root\",\"./data\"],\"command\":\"node\",\"kind\":\"stdio\"}",
+    "h16": "ef12c34fa8bb2064",
+    "slug": "node",
+    "filename": "node--ef12c34fa8bb2064.json"
+  },
+  {
+    "name": "command-args-segment-not-substring",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "--author",
+        "docs-team",
+        "--keyword=search"
+      ]
+    },
+    "note": "Flag names match secret words by whole segment: --author and --keyword pass.",
+    "identity": {
+      "kind": "stdio",
+      "command": "my-server",
+      "args": [
+        "--author",
+        "docs-team",
+        "--keyword=search"
+      ]
+    },
+    "key": "{\"args\":[\"--author\",\"docs-team\",\"--keyword=search\"],\"command\":\"my-server\",\"kind\":\"stdio\"}",
+    "h16": "ade2ed8d5ac0bf35",
+    "slug": "my-server",
+    "filename": "my-server--ade2ed8d5ac0bf35.json"
+  },
+  {
+    "name": "command-args-secret-flag",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "--api-key",
+        "abc123"
+      ]
+    },
+    "note": "A flag named for a credential, with its value in the next argument: no identity.",
+    "error": true
+  },
+  {
+    "name": "command-args-secret-flag-inline",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "--token=abc123"
+      ]
+    },
+    "note": "A flag named for a credential with an inline value: no identity.",
+    "error": true
+  },
+  {
+    "name": "command-args-secret-env",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "GITHUB_TOKEN=abc123"
+      ]
+    },
+    "note": "NAME=value whose name marks a credential: no identity.",
+    "error": true
+  },
+  {
+    "name": "command-args-secret-shape",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ]
+    },
+    "note": "A value with a known token shape: no identity.",
+    "error": true
+  },
+  {
+    "name": "command-args-url-userinfo",
+    "input": {
+      "command": "uvx",
+      "args": [
+        "git+https://user:pw@git.example.com/mcp-server"
+      ]
+    },
+    "note": "A URL with a password in its userinfo: no identity.",
+    "error": true
+  },
+  {
+    "name": "command-args-url-user-only",
+    "input": {
+      "command": "uvx",
+      "args": [
+        "git+ssh://git@github.com/example/mcp-server-a"
+      ]
+    },
+    "note": "A user name without a password, as in git+ssh://git@..., is not a secret.",
+    "identity": {
+      "kind": "stdio",
+      "command": "uvx",
+      "args": [
+        "git+ssh://git@github.com/example/mcp-server-a"
+      ]
+    },
+    "key": "{\"args\":[\"git+ssh://git@github.com/example/mcp-server-a\"],\"command\":\"uvx\",\"kind\":\"stdio\"}",
+    "h16": "094f2194170d618a",
+    "slug": "uvx",
+    "filename": "uvx--094f2194170d618a.json"
+  },
+  {
+    "name": "command-args-url-query",
+    "input": {
+      "command": "my-server",
+      "args": [
+        "https://example.com/sse?token=abc123"
+      ]
+    },
+    "note": "A URL whose query names a credential: no identity.",
+    "error": true
+  },
+  {
+    "name": "slug-long",
+    "input": {
+      "url": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "note": "Slug truncated to 48 characters, then trailing '-' trimmed.",
+    "identity": {
+      "kind": "remote",
+      "url": "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "key": "{\"kind\":\"remote\",\"url\":\"https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+    "h16": "9ede7be3ca297e40",
+    "slug": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-example-com-bbbbb",
+    "filename": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-example-com-bbbbb--9ede7be3ca297e40.json"
+  },
+  {
+    "name": "slug-empty",
+    "input": {
+      "command": "___",
+      "args": []
+    },
+    "note": "Nothing left after collapsing: slug is 'server'.",
+    "identity": {
+      "kind": "stdio",
+      "command": "___",
+      "args": []
+    },
+    "key": "{\"args\":[],\"command\":\"___\",\"kind\":\"stdio\"}",
+    "h16": "75e8df70192f05ee",
+    "slug": "server",
+    "filename": "server--75e8df70192f05ee.json"
+  }
+]

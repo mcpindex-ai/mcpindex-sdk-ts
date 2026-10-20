@@ -1,0 +1,20 @@
+{
+  "name": "summarize",
+  "description": "Summarize text.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "_meta": {
+    "fastmcp": {
+      "version": "9.9"
+    }
+  }
+}

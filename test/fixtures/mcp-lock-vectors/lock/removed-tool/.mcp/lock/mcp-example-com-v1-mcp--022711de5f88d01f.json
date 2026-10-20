@@ -1,0 +1,48 @@
+{
+  "lockVersion": "1-draft",
+  "identity": {
+    "kind": "remote",
+    "url": "https://mcp.example.com/v1/mcp"
+  },
+  "attributes": {
+    "version": "1.4.0",
+    "env": [
+      "DOCS_TOKEN"
+    ]
+  },
+  "instructions": {
+    "digest": "sha256:2c8b8199df6bfc532248f6772f239de13945f80a50a1a4a114004cc035617fda"
+  },
+  "tools": {
+    "search": {
+      "digest": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+      "contract": "sha256-bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    },
+    "fetch": {
+      "digest": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+      "contract": "sha256-f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    },
+    "delete_page": {
+      "digest": "sha256:597a2f9f93b88254b7acb59f34cf9ab399ff5dce8182b135f7cbcdc51f051c5d",
+      "contract": "sha256-597a2f9f93b88254b7acb59f34cf9ab399ff5dce8182b135f7cbcdc51f051c5d.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    }
+  }
+}

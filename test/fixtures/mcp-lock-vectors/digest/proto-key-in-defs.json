@@ -1,0 +1,1 @@
+{"name": "summarize", "description": "Summarize text.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "$defs": {"__proto__": {"type": "string"}}}}

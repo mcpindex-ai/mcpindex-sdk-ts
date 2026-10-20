@@ -1,0 +1,887 @@
+[
+  {
+    "name": "base",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "same_as": null
+  },
+  {
+    "name": "key-order",
+    "tool": {
+      "inputSchema": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "description": "Summarize text.",
+      "name": "summarize"
+    },
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "same_as": "base"
+  },
+  {
+    "name": "top-level-meta-dropped",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "_meta": {
+        "fastmcp": {
+          "version": "9.9"
+        }
+      }
+    },
+    "expected": "sha256:ce07ec15fd61e9daefb814a4e692e1d9cbc0b2cc1452300200657aaf76ce01f7",
+    "same_as": "base"
+  },
+  {
+    "name": "nested-meta-kept",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "_meta": {
+          "x": 1
+        }
+      }
+    },
+    "expected": "sha256:6bdce6744962465f21b57f0715cfabc6021e61334fd19689754832b47d8814d3",
+    "same_as": null
+  },
+  {
+    "name": "unknown-member-covered",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "x-vendor": true
+    },
+    "expected": "sha256:3efb63bf335076c7cf33486c3708a767b5dca743fe56ca9edddf6311037c5508",
+    "same_as": null
+  },
+  {
+    "name": "unicode",
+    "tool": {
+      "name": "summarize",
+      "description": "R\u00e9sum\u00e9 \u20ac \ud83d\ude00 \u2028",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": "sha256:ee867900a482aed9424865726789a03f414ad6d82875cc32b6045e9ed67d7842",
+    "same_as": null
+  },
+  {
+    "name": "number-1.0-equals-1",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maxLength": 1.0
+      }
+    },
+    "expected": "sha256:c4a0090ef35cbc2eea2e059a418e82e7d2c2c671e3761f1afa6a3ff5d0c3feae",
+    "same_as": "number-1"
+  },
+  {
+    "name": "number-1",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maxLength": 1
+      }
+    },
+    "expected": "sha256:c4a0090ef35cbc2eea2e059a418e82e7d2c2c671e3761f1afa6a3ff5d0c3feae",
+    "same_as": null
+  },
+  {
+    "name": "number-formats",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "examples": [
+          0.1,
+          -0.0,
+          1e-07,
+          123456789012345,
+          1000000000000000.0
+        ]
+      }
+    },
+    "expected": "sha256:bf33aa6e5ae058c2a4a56b9ea9170a7aed8c73979a79fe3ee11f8e5efd0319cc",
+    "same_as": null
+  },
+  {
+    "name": "annotations-and-title",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "title": "Summarize",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      }
+    },
+    "expected": "sha256:be7364b242083a11e0b7ad148f96976f007ae96ac99edebe5eba43420f60aed5",
+    "same_as": null
+  },
+  {
+    "name": "number-2^53-minus-1-has-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 9007199254740991
+      }
+    },
+    "expected": "sha256:1807a9b261ede87238f4c1c46974b2d62cf8f95f1f4efbf5271d37139ab38d42",
+    "same_as": null
+  },
+  {
+    "name": "number-2^53-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 9007199254740992
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "number-2^53-plus-1-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 9007199254740993
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "number-negative-2^53-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": -9007199254740992
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "number-2^64-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 18446744073709551616
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "number-1e20-exponent-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 1e+20
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "unknown-top-level-member-object",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    "expected": "sha256:a2aff4c34aba8a5016ba8a698a77a4e4954eb9b45d07aa4837387057ee0946c2",
+    "same_as": null
+  },
+  {
+    "name": "unknown-annotation-member",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "x-vendorHint": "fast"
+      }
+    },
+    "expected": "sha256:426f225568e9670d202c1899f08b319338f568b7102af07f97c4b92ea06b1ba2",
+    "same_as": null
+  },
+  {
+    "name": "annotation-known-only",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    "expected": "sha256:5340df3cc0454a22ddc7846362b69195459c0512a69f635fab4b5e820d682c86",
+    "same_as": null
+  },
+  {
+    "name": "proto-key-in-properties",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "__proto__": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:96ee89035a9af4fda103b9ae4b360fb6c172e5d7fecf78949a0237164e7c227c",
+    "same_as": null
+  },
+  {
+    "name": "proto-control-in-properties",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "proto": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:9d4424057d78d839a0e9ac9c136ab866c7c17620338df7dde42e60dda65923d9",
+    "same_as": null
+  },
+  {
+    "name": "proto-key-in-property",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "__proto__": {
+              "x": 1
+            }
+          }
+        }
+      }
+    },
+    "expected": "sha256:14f15e2242e7015de058dbee158ebff119a68ff6751971c55dc2a2a468aba991",
+    "same_as": null
+  },
+  {
+    "name": "proto-key-in-property-control",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:603148b397c3e7222f194e4a2ef2902d07e527fbdd89e4b24495956b988137c4",
+    "same_as": null
+  },
+  {
+    "name": "proto-key-in-defs",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "$defs": {
+          "__proto__": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:90bdc48c9ecb01ab60427b933f348b4217e8b8c30cbcdd413df2b351235ad9c9",
+    "same_as": null
+  },
+  {
+    "name": "lone-surrogate-key",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "\ud800": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "lone-surrogate-value",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.\udc00",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "lone-surrogate-high-at-end",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.\ud83d",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "lone-surrogate-reversed-pair",
+    "tool": {
+      "name": "summarize",
+      "description": "\ude00\ud83d",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "surrogate-pair-escaped",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize \ud83d\ude00",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": "sha256:389022b04d8f72a5832d841e5c31378d9faa970dd054fe5b624cd8e39725edbe",
+    "same_as": "surrogate-pair-literal"
+  },
+  {
+    "name": "surrogate-pair-literal",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize \ud83d\ude00",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": "sha256:389022b04d8f72a5832d841e5c31378d9faa970dd054fe5b624cd8e39725edbe",
+    "same_as": null
+  },
+  {
+    "name": "key-nfc",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "caf\u00e9": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:fec92c91a761a783edc660249ec6f50bd52190a0dd9f4cf3f76422657f7d4a5e",
+    "same_as": null
+  },
+  {
+    "name": "key-nfd",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cafe\u0301": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected": "sha256:6db82c66ed966c1669f07f796f6a05207909c5e8928f463030c27f83fd50bd37",
+    "same_as": null
+  },
+  {
+    "name": "number-0",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 0
+      }
+    },
+    "expected": "sha256:589afe07606624f77ea83b07b41049e42b25d9171b91152b925e37a2ffe246d5",
+    "same_as": null
+  },
+  {
+    "name": "number-minus-zero",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": -0.0
+      }
+    },
+    "expected": "sha256:589afe07606624f77ea83b07b41049e42b25d9171b91152b925e37a2ffe246d5",
+    "same_as": "number-0"
+  },
+  {
+    "name": "number-1e21",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 1e+21
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "number-0.1-plus-0.2",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 0.30000000000000004
+      }
+    },
+    "expected": "sha256:529dc50e541014c6c6465173bc44c09d925ad801fffc5866d73d51480cae3e97",
+    "same_as": null
+  },
+  {
+    "name": "number-0.3",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 0.3
+      }
+    },
+    "expected": "sha256:abd051c2e57c37504b79a2d03605b22081ee498d067a09140e12ed1da0d8154f",
+    "same_as": null
+  },
+  {
+    "name": "number-float-2^53-minus-1",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 9007199254740991.0
+      }
+    },
+    "expected": "sha256:1807a9b261ede87238f4c1c46974b2d62cf8f95f1f4efbf5271d37139ab38d42",
+    "same_as": "number-2^53-minus-1-has-digest"
+  },
+  {
+    "name": "number-float-2^53-no-digest",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "maximum": 9007199254740992.0
+      }
+    },
+    "expected": null,
+    "same_as": null
+  },
+  {
+    "name": "annotations-meta-kept",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "_meta": {
+          "k": "v"
+        }
+      }
+    },
+    "expected": "sha256:b4204c05edd9f3f83919023fc93f4d98f59b299c5c39c499889bb3ef05fd8bb8",
+    "same_as": null
+  },
+  {
+    "name": "meta-top-removed-nested-kept",
+    "tool": {
+      "name": "summarize",
+      "description": "Summarize text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "_meta": {
+          "k": "v"
+        }
+      },
+      "_meta": {
+        "x": 1
+      }
+    },
+    "expected": "sha256:b4204c05edd9f3f83919023fc93f4d98f59b299c5c39c499889bb3ef05fd8bb8",
+    "same_as": "annotations-meta-kept"
+  },
+  {
+    "name": "duplicate-key-last-value",
+    "tool": {
+      "name": "summarize",
+      "description": "Second description.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "expected": "sha256:4c7994c96b1b7bbb776b3a05e642d8ab5c8431e516b095618791aa1a95ec9a90",
+    "same_as": null
+  }
+]

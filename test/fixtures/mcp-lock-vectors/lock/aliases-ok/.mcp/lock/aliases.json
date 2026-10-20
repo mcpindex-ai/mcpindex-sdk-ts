@@ -1,0 +1,13 @@
+{
+  "lockVersion": "1-draft",
+  "aliases": {
+    "docs": {
+      "kind": "remote",
+      "url": "https://mcp.example.com/v1/mcp"
+    },
+    "docs-local": {
+      "kind": "stdio",
+      "package": "npm:@example/docs-server"
+    }
+  }
+}

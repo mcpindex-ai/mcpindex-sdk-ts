@@ -1,0 +1,5 @@
+{
+  "posture": "guard",
+  "host": "vectors",
+  "maxStaleness": 10
+}

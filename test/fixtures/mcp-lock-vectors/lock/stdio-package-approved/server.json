@@ -1,0 +1,4 @@
+{
+  "kind": "stdio",
+  "package": "npm:@example/docs-server"
+}

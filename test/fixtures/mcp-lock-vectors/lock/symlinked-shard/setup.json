@@ -1,0 +1,8 @@
+{
+  "symlinks": [
+    {
+      "path": ".mcp/lock/mcp-example-com-v1-mcp--022711de5f88d01f.json",
+      "target": "../../shadow/mcp-example-com-v1-mcp--022711de5f88d01f.json"
+    }
+  ]
+}

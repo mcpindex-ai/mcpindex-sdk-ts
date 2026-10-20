@@ -1,0 +1,35 @@
+{
+  "lockVersion": "1-draft",
+  "identity": {
+    "kind": "stdio",
+    "package": "npm:@example/docs-server"
+  },
+  "attributes": {
+    "version": "1.4.0",
+    "env": [
+      "DOCS_TOKEN"
+    ]
+  },
+  "tools": {
+    "search": {
+      "digest": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+      "contract": "sha256-bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    },
+    "fetch": {
+      "digest": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+      "contract": "sha256-f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5.json",
+      "approval": {
+        "subject": "github:docs-owner",
+        "at": "2026-10-19T17:00:00Z",
+        "via": "pr",
+        "ref": "pr-42"
+      }
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "lockError": null,
+  "shown": [
+    "search",
+    "fetch",
+    "count",
+    "search",
+    "archive"
+  ],
+  "withheld": {},
+  "flagged": {
+    "search": "duplicate-name",
+    "fetch": "upstream-changed",
+    "count": "no-digest",
+    "archive": "new-tool"
+  },
+  "removed": [
+    "delete_page"
+  ],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "allow",
+    "fetch": "allow",
+    "count": "allow",
+    "archive": "allow"
+  },
+  "meta": {},
+  "event": {
+    "schema": "mcpindex.lock.event/1",
+    "type": "listing",
+    "host": "vectors",
+    "server": {
+      "h16": "022711de5f88d01f",
+      "slug": "mcp-example-com-v1-mcp"
+    },
+    "posture": "monitor",
+    "lockError": null,
+    "counts": {
+      "served": 5,
+      "shown": 5,
+      "withheld": 0,
+      "removed": 1
+    },
+    "tools": [
+      {
+        "name": "search",
+        "served": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "approved": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "decision": "shown",
+        "reason": "duplicate-name",
+        "meta": null
+      },
+      {
+        "name": "fetch",
+        "served": "sha256:79fae06a0075c8b28684ec0eaee4ecee770a35d64deb309b857d690be187dd4f",
+        "approved": "sha256:f442b7dcbbc159d7bbdcb55a35f33cdc686901f7ce1a157feb046653b9d55da5",
+        "decision": "shown",
+        "reason": "upstream-changed",
+        "meta": null
+      },
+      {
+        "name": "count",
+        "served": null,
+        "approved": null,
+        "decision": "shown",
+        "reason": "no-digest",
+        "meta": null
+      },
+      {
+        "name": "search",
+        "served": "sha256:88819b6b60daf94d2e80b04c0d2d3b5c2448a5809f5282935fa31878e33cfdf8",
+        "approved": "sha256:bbe1ddd115268fd9ff9a15656b8199d73d5c44d83f066573b5a0e71eb3207fc6",
+        "decision": "shown",
+        "reason": "duplicate-name",
+        "meta": null
+      },
+      {
+        "name": "archive",
+        "served": "sha256:a6613430f12da9da5ed0206873f7bdcdbd2e1704f01957ff033db3e0f46fbdfe",
+        "approved": null,
+        "decision": "shown",
+        "reason": "new-tool",
+        "meta": null
+      }
+    ],
+    "removed": [
+      "delete_page"
+    ],
+    "instructions": null
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "lockError": null,
+  "shown": [],
+  "withheld": {},
+  "flagged": {},
+  "removed": [],
+  "instructions": null,
+  "stripInstructions": false,
+  "calls": {
+    "search": "no-listing",
+    "fetch": "no-listing"
+  },
+  "meta": {},
+  "event": null
+}
