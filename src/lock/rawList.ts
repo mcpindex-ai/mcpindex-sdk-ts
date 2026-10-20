@@ -49,6 +49,10 @@ import type { LockSnapshot, LockStore } from "./store.js";
 /** Pages and tools one listing may span before the server is treated as unreachable. */
 export const MAX_LIST_PAGES = 100;
 export const MAX_LIST_TOOLS = 10_000;
+/** Unanswered client requests tracked at once. */
+export const MAX_OUTSTANDING = 4_096;
+/** Default age after which a call first reloads the snapshot (see LockOptions.maxStalenessMs). */
+export const DEFAULT_MAX_STALENESS_MS = 60_000;
 
 const FORBIDDEN_OPTIONS = ["autoAccept", "autoApprove", "tofu", "newTools", "repin", "migrate"];
 
@@ -60,7 +64,10 @@ export interface LockOptions {
   /** The host name written into events. */
   readonly host?: string;
   readonly sink?: LockEventSink;
-  /** Refuse calls with lock-stale when the snapshot behind the allow-list is older than this and a reload fails. */
+  /**
+   * Age after which a call reloads the snapshot, so a revoke reaches a live
+   * connection; if the reload fails the call gets lock-stale. Default 60 s.
+   */
   readonly maxStalenessMs?: number;
   readonly now?: () => number;
 }
@@ -135,7 +142,7 @@ export class LockedTransport implements Transport {
     this.#posture = options.posture;
     this.#sink = options.sink;
     this.#now = options.now ?? Date.now;
-    this.gate = new CallGate({ maxStalenessMs: options.maxStalenessMs, now: this.#now });
+    this.gate = new CallGate({ maxStalenessMs: options.maxStalenessMs ?? DEFAULT_MAX_STALENESS_MS, now: this.#now });
     this.#events = { host: options.host ?? "mcpindex-sdk", identity: this.#identity };
   }
 
@@ -175,6 +182,9 @@ export class LockedTransport implements Transport {
   async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
     const msg = message as unknown;
     if (Array.isArray(msg)) throw new Error("lock mode does not send JSON-RPC batches");
+    if (isObj(msg) && own(msg, "method") === "tools/call" && idKey(own(msg, "id")) === null) {
+      throw new Error("lock mode refuses a tools/call without a valid request id");
+    }
     if (isObj(msg) && typeof own(msg, "method") === "string" && idKey(own(msg, "id")) !== null) {
       const method = own(msg, "method") as string;
       const id = own(msg, "id") as RequestId;
@@ -197,6 +207,9 @@ export class LockedTransport implements Transport {
         });
         return;
       }
+      if (this.#outstanding.size >= MAX_OUTSTANDING) {
+        throw new Error("lock mode: too many requests without a response");
+      }
       this.#outstanding.set(idKey(id) as string, method);
     }
     await this.#inner.send(message, options);
@@ -218,6 +231,8 @@ export class LockedTransport implements Transport {
     } catch {
       return; // stays stale; calls get lock-stale
     }
+    // A listing that completed during the await is newer; never overwrite it.
+    if (this.gate.decision !== previous) return;
     const fresh = checkListing(snapshot.lock, this.#identity, { tools, instructions: this.#served }, this.#posture);
     const callable = new Set([...fresh.callable].filter((n) => previous.callable.has(n)));
     this.gate.record(Object.freeze({ ...fresh, callable }), snapshot);

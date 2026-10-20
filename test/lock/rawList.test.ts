@@ -389,6 +389,56 @@ test("a store that throws on load fails closed as lock-unreadable", async () => 
   await r.done();
 });
 
+test("a tools/call without a valid id is refused before it reaches the server", async () => {
+  const store = new FileLockStore({ root: "/nonexistent" });
+  const server = new FakeServer();
+  const locked = new LockedTransport(new TextTransport(server), { store, identity: ID, posture: "guard" });
+  await locked.start();
+  for (const id of [undefined, null, { x: 1 }]) {
+    await assert.rejects(
+      locked.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "search" } } as unknown as JSONRPCMessage),
+    );
+  }
+  await new Promise((res) => setTimeout(res, 10));
+  assert.equal(server.calls.length, 0);
+});
+
+test("a refresh that finishes after a newer listing does not overwrite it", async () => {
+  const t = tmpRoot();
+  try {
+    const file = await approvedStore(t.root, [SEARCH, FETCH]);
+    let clock = 1_000;
+    let release: (() => void) | null = null;
+    let hold = false;
+    const store: LockStore = {
+      loadSnapshot: async () => {
+        if (hold) await new Promise<void>((res) => (release = res));
+        return { ...(await file.loadSnapshot()), loadedAt: clock };
+      },
+      approve: (r) => file.approve(r),
+      revoke: (r) => file.revoke(r),
+    };
+    const r = await rig(store, "guard", (s) => {
+      s.pages = [[SEARCH, FETCH]];
+      s.instructions = undefined;
+    }, { maxStalenessMs: 100, now: () => clock });
+    await r.client.listTools();
+    clock += 500;
+    hold = true;
+    const pending = r.client.callTool({ name: "fetch", arguments: {} }); // stale: starts a held reload
+    await new Promise((res) => setTimeout(res, 10));
+    hold = false;
+    r.server.pages = [[SEARCH, FETCH_CHANGED]];
+    await r.client.listTools(); // newer listing withholds fetch
+    (release as unknown as () => void)();
+    await pending.catch(() => undefined);
+    assert.equal((await refusal(r.client.callTool({ name: "fetch", arguments: {} }))).reason, "upstream-changed");
+    await r.done();
+  } finally {
+    t.done();
+  }
+});
+
 test("lock mode refuses auto-accept, tofu and re-pin options, and unknown postures", () => {
   const store = new FileLockStore({ root: "/nonexistent" });
   const inner = new TextTransport(new FakeServer());

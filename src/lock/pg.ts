@@ -27,6 +27,16 @@
  * which catches deletes of trailing records together with the head update.
  * Deleting every row for a tenant cannot be told apart from a new tenant
  * without an external anchor: keep the last seq, or require a head signature.
+ * The chain has no key. Without a headVerifier, whoever can write the tables
+ * (the schema owner, a superuser) can rewrite a record and recompute every
+ * hash after it; only a signed head gives tamper evidence against them.
+ *
+ * Known limit of the tenant setting: RLS keys on a session GUC, which any
+ * session can set. A holder of a shared mcplock_runtime login can read any
+ * tenant, and a holder of mcplock_approver can append to any tenant. Give
+ * each tenant its own login roles, or bind tenants to session_user with a
+ * mapping table, before sharing one database across mutually untrusted
+ * tenants.
  *
  * Staleness. Each snapshot carries snapshotId (the head hash) and loadedAt.
  * Hosts pass maxStalenessMs to the CallGate (LockOptions in rawList.ts); calls
@@ -147,7 +157,7 @@ GRANT SELECT, INSERT, UPDATE ON mcplock.heads TO mcplock_approver;
 /** Replace any password or userinfo in a connection string before it is shown. */
 export function redactDsn(dsn: string): string {
   return dsn
-    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/?#]*@/i, "$1***@")
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, "$1***@")
     .replace(/([?&](?:password|sslpassword|passfile|sslkey)=)[^&#]*/gi, "$1***")
     .replace(/(\bpassword\s*=\s*)('[^']*'|\S+)/gi, "$1***");
 }

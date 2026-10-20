@@ -45,6 +45,7 @@ test("redactDsn hides passwords in URL and keyword forms", () => {
   assert.equal(redactDsn("postgresql://u:p@h/db?sslmode=require&password=hunter2"), "postgresql://***@h/db?sslmode=require&password=***");
   assert.equal(redactDsn("host=h user=u password=hunter2 dbname=x"), "host=h user=u password=*** dbname=x");
   assert.ok(!redactDsn("host=h password='a b c'").includes("a b c"));
+  assert.equal(redactDsn("postgres://u:p@ss@db/x"), "postgres://***@db/x");
 });
 
 test("PgLockStore needs an authenticated principal with a tenant id", () => {
