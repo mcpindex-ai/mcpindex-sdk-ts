@@ -92,7 +92,7 @@ export type {
 } from "./store.js";
 export { EVENT_SCHEMA, approvalEvent, jsonlFileSink, listingEvent, refusalEvent } from "./events.js";
 export type { ApprovalEvent, EventContext, ListingEvent, LockEvent, LockEventSink, RefusalEvent } from "./events.js";
-export { LockedTransport, MAX_LIST_PAGES, MAX_LIST_TOOLS, MAX_OUTSTANDING, lockClient } from "./rawList.js";
+export { LockedTransport, MAX_LIST_PAGES, MAX_LIST_TOOLS, MAX_OUTSTANDING, REQUEST_TTL_MS, lockClient } from "./rawList.js";
 export type { ConnectableClient, LockOptions } from "./rawList.js";
 export { anchoredPattern, sigstoreVerifier } from "./signing.js";
 export type { SigstoreVerifierOptions } from "./signing.js";

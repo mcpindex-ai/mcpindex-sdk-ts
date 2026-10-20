@@ -7,9 +7,10 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -17,7 +18,8 @@ import { deserializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
-import { LockedTransport, lockClient } from "../../src/lock/rawList.js";
+import { LockedTransport, MAX_OUTSTANDING, REQUEST_TTL_MS, lockClient } from "../../src/lock/rawList.js";
+import { shardFilename } from "../../src/lock/lock.js";
 import type { LockOptions } from "../../src/lock/rawList.js";
 import { FileLockStore } from "../../src/lock/store.js";
 import type { LockSnapshot, LockStore } from "../../src/lock/store.js";
@@ -43,6 +45,8 @@ class FakeServer {
   calls: Array<{ name: string; args: unknown }> = [];
   listRequests = 0;
   listError = false;
+  /** When set, a request for a later page waits for this before it is answered. */
+  holdPage: Promise<void> | null = null;
   push: (line: string) => void = () => undefined;
 
   receive(text: string): void {
@@ -63,6 +67,13 @@ class FakeServer {
         return;
       }
       const cursor = msg.params?.cursor;
+      if (cursor !== undefined && this.holdPage !== null) {
+        const held = this.holdPage;
+        this.holdPage = null;
+        this.listRequests--;
+        void held.then(() => this.receive(text));
+        return;
+      }
       const index = cursor === undefined ? 0 : Number(String(cursor).slice(1));
       const page = this.pages[index] ?? [];
       const next = index + 1 < this.pages.length ? `,"nextCursor":"p${index + 1}"` : "";
@@ -480,23 +491,317 @@ test("lock mode refuses auto-accept, tofu and re-pin options, and unknown postur
   assert.throws(() => new LockedTransport(inner, { store, identity: ID, posture: "loose" as Posture }));
 });
 
-test("no network egress: a whole session never calls fetch", async () => {
+test("no network egress: a session over a real stdio child opens no socket, request, lookup or fetch", async () => {
+  const net = (await import("node:net")).default;
+  const tls = (await import("node:tls")).default;
+  const http = (await import("node:http")).default;
+  const https = (await import("node:https")).default;
+  const dns = (await import("node:dns")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const egress: string[] = [];
+  const trap = (label: string) => (): never => {
+    egress.push(label);
+    throw new Error(`egress: ${label}`);
+  };
+  const targets: Array<[Record<string, unknown>, string]> = [
+    [net as unknown as Record<string, unknown>, "connect"],
+    [net as unknown as Record<string, unknown>, "createConnection"],
+    [tls as unknown as Record<string, unknown>, "connect"],
+    [http as unknown as Record<string, unknown>, "request"],
+    [http as unknown as Record<string, unknown>, "get"],
+    [https as unknown as Record<string, unknown>, "request"],
+    [https as unknown as Record<string, unknown>, "get"],
+    [dns as unknown as Record<string, unknown>, "lookup"],
+    [dns.promises as unknown as Record<string, unknown>, "lookup"],
+    [globalThis as unknown as Record<string, unknown>, "fetch"],
+  ];
+  const saved = targets.map(([obj, key]) => obj[key]);
   const t = tmpRoot();
-  const original = globalThis.fetch;
-  let fetches = 0;
-  globalThis.fetch = (async () => {
-    fetches++;
-    throw new Error("egress");
-  }) as typeof fetch;
   try {
-    const r = await rig(await approvedStore(t.root, [SEARCH, FETCH], INSTRUCTIONS));
+    targets.forEach(([obj, key], n) => (obj[key] = trap(`${n}:${key}`)));
+    syncBuiltinESMExports();
+    // The traps are live for ESM importers too, so a regression would be seen.
+    const { connect } = await import("node:net");
+    assert.throws(() => connect(1));
+    assert.equal(egress.length, 1);
+    egress.length = 0;
+
+    const store = await approvedStore(t.root, [SEARCH, FETCH], INSTRUCTIONS);
+    const server = fileURLToPath(new URL("../../../test/fixtures/ai/stdio-server.mjs", import.meta.url));
+    const transport = new StdioClientTransport({ command: process.execPath, args: [server, JSON.stringify([SEARCH, FETCH_CHANGED])] });
+    const client = new Client({ name: "lock-test", version: "1" }, { capabilities: {} });
+    await lockClient(client, transport, { store, identity: ID, posture: "guard" });
+    const listed = await client.listTools();
+    assert.deepEqual(listed.tools.map((x) => x.name), ["search"]);
+    await client.callTool({ name: "search", arguments: {} });
+    assert.equal((await refusal(client.callTool({ name: "fetch", arguments: {} }))).reason, "upstream-changed");
+    await client.close();
+    assert.deepEqual(egress, []);
+  } finally {
+    targets.forEach(([obj, key], n) => (obj[key] = saved[n]));
+    syncBuiltinESMExports();
+    t.done();
+  }
+});
+
+// Draft 1c ---------------------------------------------------------------
+
+test("S1: while a listing is being collected every call is refused with no-listing and not sent", async () => {
+  const t = tmpRoot();
+  try {
+    const store = await approvedStore(t.root, [SEARCH, FETCH]);
+    const r = await rig(store, "guard", (s) => {
+      s.pages = [[SEARCH, FETCH]];
+      s.instructions = undefined;
+    });
     await r.client.listTools();
     await r.client.callTool({ name: "search", arguments: {} });
-    await refusal(r.client.callTool({ name: "fetch", arguments: {} }));
+    // list_changed alone changes nothing.
+    r.server.push('{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}');
+    await new Promise((res) => setTimeout(res, 10));
+    assert.equal(r.locked.listingDue, true);
+    await r.client.callTool({ name: "search", arguments: {} });
+    // A two-page listing whose second page is held: calls during the walk are refused.
+    let release = (): void => undefined;
+    r.server.holdPage = new Promise<void>((res) => (release = res));
+    r.server.pages = [[SEARCH], [FETCH]];
+    const listing = r.client.listTools();
+    await new Promise((res) => setTimeout(res, 20));
+    assert.equal(r.locked.gate.listingInProgress, true);
+    assert.deepEqual(await refusal(r.client.callTool({ name: "search", arguments: {} })), { code: -32011, reason: "no-listing" });
+    release();
+    const listed = await listing;
+    assert.deepEqual(listed.tools.map((x) => x.name), ["search", "fetch"]);
+    assert.equal(r.locked.gate.listingInProgress, false);
+    await r.client.callTool({ name: "fetch", arguments: {} });
+    assert.deepEqual(r.server.calls.map((c) => c.name), ["search", "search", "fetch"]);
     await r.done();
-    assert.equal(fetches, 0);
   } finally {
-    globalThis.fetch = original;
+    t.done();
+  }
+});
+
+class RawInner implements Transport {
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: <T extends JSONRPCMessage>(message: T) => void;
+  sent: Array<Record<string, unknown>> = [];
+  async start(): Promise<void> {}
+  async send(m: JSONRPCMessage): Promise<void> {
+    this.sent.push(m as unknown as Record<string, unknown>);
+  }
+  async close(): Promise<void> {}
+  /** Hand the adapter a frame as JSON.parse returned it, without the SDK's envelope check. */
+  frame(text: string): void {
+    this.onmessage?.(JSON.parse(text) as JSONRPCMessage);
+  }
+}
+
+test("S2: a frame with result.tools that is not the response to an in-flight tools/list is dropped and reported", async () => {
+  const inner = new RawInner();
+  const locked = new LockedTransport(inner, { store: new FileLockStore({ root: "/nonexistent" }), identity: ID, posture: "monitor" });
+  const got: unknown[] = [];
+  const errors: string[] = [];
+  locked.onmessage = (m) => got.push(m);
+  locked.onerror = (e) => errors.push(e.message);
+  await locked.start();
+  await locked.send({ jsonrpc: "2.0", id: 2, method: "tools/list" } as JSONRPCMessage);
+  inner.frame(`{"jsonrpc":"2.0","id":2,"method":"x","result":{"tools":[${FETCH_CHANGED}]}}`);
+  inner.frame(`{"jsonrpc":"2.0","method":"notifications/x","result":{"tools":[${FETCH_CHANGED}]}}`);
+  inner.frame(`{"jsonrpc":"2.0","id":null,"result":{"tools":[${FETCH_CHANGED}]}}`);
+  inner.frame(`{"jsonrpc":"2.0","result":{"tools":[${FETCH_CHANGED}]}}`);
+  await new Promise((res) => setTimeout(res, 10));
+  assert.deepEqual(got, []);
+  assert.equal(errors.length, 4);
+  assert.match(errors[0] ?? "", /both a method and result.tools/);
+  assert.match(errors[1] ?? "", /both a method and result.tools/);
+  assert.equal(locked.decision, null);
+});
+
+test("S2: a response to another request that carries result.tools is dropped", async () => {
+  const inner = new (class implements Transport {
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+    onmessage?: <T extends JSONRPCMessage>(message: T) => void;
+    async start(): Promise<void> {}
+    async send(): Promise<void> {}
+    async close(): Promise<void> {}
+  })();
+  const store = new FileLockStore({ root: "/nonexistent" });
+  const locked = new LockedTransport(inner, { store, identity: ID, posture: "monitor" });
+  const got: unknown[] = [];
+  const errors: string[] = [];
+  locked.onmessage = (m) => got.push(m);
+  locked.onerror = (e) => errors.push(e.message);
+  await locked.start();
+  await locked.send({ jsonrpc: "2.0", id: 1, method: "ping" } as JSONRPCMessage);
+  await locked.send({ jsonrpc: "2.0", id: 2, method: "tools/list" } as JSONRPCMessage);
+  inner.onmessage?.(JSON.parse(`{"jsonrpc":"2.0","id":1,"result":{"tools":[${SEARCH}]}}`) as JSONRPCMessage);
+  // Same value, other JSON type: matches nothing.
+  inner.onmessage?.(JSON.parse(`{"jsonrpc":"2.0","id":"2","result":{"tools":[${SEARCH}]}}`) as JSONRPCMessage);
+  await new Promise((res) => setTimeout(res, 10));
+  assert.deepEqual(got, []);
+  assert.equal(errors.length, 2);
+  assert.match(errors[0] ?? "", /response to ping that carries result.tools/);
+  assert.match(errors[1] ?? "", /matches no outstanding request/);
+  assert.equal(locked.decision, null);
+});
+
+test("T4: unanswered requests are bounded without throwing; cancelled and expired ones are forgotten", async () => {
+  const sent: unknown[] = [];
+  const inner = new (class implements Transport {
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+    onmessage?: <T extends JSONRPCMessage>(message: T) => void;
+    async start(): Promise<void> {}
+    async send(m: JSONRPCMessage): Promise<void> {
+      sent.push(m);
+    }
+    async close(): Promise<void> {}
+  })();
+  let clock = 0;
+  const store = new FileLockStore({ root: "/nonexistent" });
+  const locked = new LockedTransport(inner, { store, identity: ID, posture: "guard", now: () => clock });
+  const got: Array<Record<string, unknown>> = [];
+  const errors: string[] = [];
+  locked.onmessage = (m) => got.push(m as unknown as Record<string, unknown>);
+  locked.onerror = (e) => errors.push(e.message);
+  await locked.start();
+  for (let i = 0; i < MAX_OUTSTANDING + 100; i++) await locked.send({ jsonrpc: "2.0", id: i, method: "ping" } as JSONRPCMessage);
+  // The oldest were forgotten; the newest still match.
+  inner.onmessage?.({ jsonrpc: "2.0", id: 0, result: {} } as JSONRPCMessage);
+  inner.onmessage?.({ jsonrpc: "2.0", id: MAX_OUTSTANDING + 99, result: {} } as JSONRPCMessage);
+  // A cancelled request is forgotten at once.
+  await locked.send({ jsonrpc: "2.0", id: "c", method: "ping" } as JSONRPCMessage);
+  await locked.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "c" } } as JSONRPCMessage);
+  inner.onmessage?.({ jsonrpc: "2.0", id: "c", result: {} } as JSONRPCMessage);
+  // An old one expires.
+  await locked.send({ jsonrpc: "2.0", id: "old", method: "ping" } as JSONRPCMessage);
+  clock += REQUEST_TTL_MS + 1;
+  inner.onmessage?.({ jsonrpc: "2.0", id: "old", result: {} } as JSONRPCMessage);
+  await new Promise((res) => setTimeout(res, 10));
+  assert.deepEqual(got.map((m) => m.id), [MAX_OUTSTANDING + 99]);
+  assert.equal(errors.filter((e) => /matches no outstanding request/.test(e)).length, 3);
+});
+
+test("T4: a page request that gets no response expires and fails its listing", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const inner = new (class implements Transport {
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+    onmessage?: <T extends JSONRPCMessage>(message: T) => void;
+    async start(): Promise<void> {}
+    async send(m: JSONRPCMessage): Promise<void> {
+      sent.push(m as unknown as Record<string, unknown>);
+    }
+    async close(): Promise<void> {}
+  })();
+  let clock = 0;
+  const t = tmpRoot();
+  try {
+    const store = await approvedStore(t.root, [SEARCH]);
+    const locked = new LockedTransport(inner, { store, identity: ID, posture: "guard", now: () => clock });
+    const got: Array<Record<string, unknown>> = [];
+    locked.onmessage = (m) => got.push(m as unknown as Record<string, unknown>);
+    await locked.start();
+    await locked.send({ jsonrpc: "2.0", id: 1, method: "tools/list" } as JSONRPCMessage);
+    inner.onmessage?.(JSON.parse(`{"jsonrpc":"2.0","id":1,"result":{"tools":[${SEARCH}],"nextCursor":"p1"}}`) as JSONRPCMessage);
+    await new Promise((res) => setTimeout(res, 10));
+    assert.equal(locked.gate.listingInProgress, true);
+    clock += REQUEST_TTL_MS + 1;
+    await locked.send({ jsonrpc: "2.0", id: 2, method: "ping" } as JSONRPCMessage);
+    assert.equal(locked.gate.listingInProgress, false);
+    assert.equal(locked.gate.check("search"), "unreachable");
+    const failed = got.find((m) => m.id === 1) as { error?: { message?: string } } | undefined;
+    assert.match(failed?.error?.message ?? "", /no response/);
+  } finally {
+    t.done();
+  }
+});
+
+const META_TOOL = '{"name":"meta","description":"m","inputSchema":{"type":"object"},"_meta":{"ui":{"resourceUri":"ui://a"}}}';
+const META_CHANGED = META_TOOL.replace("ui://a", "ui://evil");
+const META_NONE = '{"name":"meta","description":"m","inputSchema":{"type":"object"}}';
+
+test("S3: a served _meta is relayed only when it matches the approved metaDigest", async () => {
+  const t = tmpRoot();
+  try {
+    const store = await approvedStore(t.root, [META_TOOL]);
+    const shard = readFileSync(join(t.root, ".mcp", "lock", shardFilename(ID)), "utf8");
+    assert.match(shard, /"metaDigest": "sha256:[0-9a-f]{64}"/);
+    const same = await rig(store, "guard", (s) => {
+      s.pages = [[META_TOOL]];
+      s.instructions = undefined;
+    });
+    const a = await same.client.listTools();
+    assert.deepEqual((a.tools[0] as { _meta?: unknown })._meta, { ui: { resourceUri: "ui://a" } });
+    assert.equal(same.locked.decision?.meta.size, 0);
+    await same.done();
+
+    const changed = await rig(store, "guard", (s) => {
+      s.pages = [[META_CHANGED]];
+      s.instructions = undefined;
+    });
+    const b = await changed.client.listTools();
+    assert.deepEqual(b.tools.map((x) => x.name), ["meta"]);
+    assert.equal((b.tools[0] as { _meta?: unknown })._meta, undefined);
+    assert.equal(changed.locked.decision?.meta.get("meta"), "meta-changed");
+    await changed.client.callTool({ name: "meta", arguments: {} });
+    await changed.done();
+
+    const monitor = await rig(store, "monitor", (s) => {
+      s.pages = [[META_CHANGED]];
+      s.instructions = undefined;
+    });
+    const c = await monitor.client.listTools();
+    assert.deepEqual((c.tools[0] as { _meta?: unknown })._meta, { ui: { resourceUri: "ui://evil" } });
+    assert.equal(monitor.locked.decision?.meta.get("meta"), "meta-changed");
+    await monitor.done();
+  } finally {
+    t.done();
+  }
+});
+
+test("S3: a _meta with no approved metaDigest is removed and flagged meta-unapproved", async () => {
+  const t = tmpRoot();
+  try {
+    const store = await approvedStore(t.root, [META_NONE]);
+    const r = await rig(store, "guard", (s) => {
+      s.pages = [[META_TOOL]];
+      s.instructions = undefined;
+    });
+    const listed = await r.client.listTools();
+    assert.deepEqual(listed.tools.map((x) => x.name), ["meta"]);
+    assert.equal((listed.tools[0] as { _meta?: unknown })._meta, undefined);
+    assert.equal(r.locked.decision?.meta.get("meta"), "meta-unapproved");
+    await r.done();
+  } finally {
+    t.done();
+  }
+});
+
+test("T5: a call whose name is not a string is refused without data.tool, and its event names \"\"", async () => {
+  const t = tmpRoot();
+  try {
+    const r = await rig(await approvedStore(t.root, [SEARCH]), "guard", (s) => (s.instructions = undefined));
+    await r.client.listTools();
+    const got: Array<Record<string, unknown>> = [];
+    const prev = r.locked.onmessage;
+    r.locked.onmessage = (m, extra) => {
+      got.push(m as unknown as Record<string, unknown>);
+      prev?.(m, extra);
+    };
+    await r.locked.send({ jsonrpc: "2.0", id: 900, method: "tools/call", params: { name: 7 } } as unknown as JSONRPCMessage);
+    await new Promise((res) => setTimeout(res, 10));
+    const answer = got.find((m) => m.id === 900) as { error: { data: Record<string, unknown> } };
+    assert.deepEqual(answer.error.data, { reason: "not-listed" });
+    const event = r.events.find((e) => e.type === "refusal");
+    assert.ok(event && event.type === "refusal");
+    assert.equal(event.tool, "");
+    assert.equal(r.server.calls.length, 0);
+    await r.done();
+  } finally {
     t.done();
   }
 });
