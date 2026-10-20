@@ -234,3 +234,35 @@ test("sigstore verifier: exact issuer and SAN match on the returned signer, anch
 test("real Sigstore bundle verification", { skip: "no valid Sigstore bundle in vectors-draft-1b; needs a signed MANIFEST.json and an operator trusted_root.json" }, () => {
   // Intentionally empty.
 });
+
+test("T6: .mcp/lock swapped for a symlink between the directory check and the open is lock-unreadable", async () => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const tmp = mkdtempSync(join(tmpdir(), "mcplock-swap-"));
+  const real = fs.openSync;
+  try {
+    // An attacker tree with a lock of its own.
+    const root = join(tmp, "repo");
+    const evil = join(tmp, "evil");
+    for (const dir of [join(root, ".mcp", "lock"), join(root, ".mcp", "contracts"), join(evil, "lock")]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(root, ".mcp", "lock", "aliases.json"), '{\n  "lockVersion": "1-draft",\n  "aliases": {}\n}\n');
+    writeFileSync(join(evil, "lock", "aliases.json"), '{\n  "lockVersion": "1-draft",\n  "aliases": {}\n}\n');
+    assert.ok(!((await loadLock(root).catch((e: unknown) => e)) instanceof Error));
+    let swapped = false;
+    fs.openSync = ((path: string, ...rest: unknown[]) => {
+      if (!swapped && String(path).endsWith(join(".mcp", "lock", "aliases.json"))) {
+        swapped = true;
+        renameSync(join(root, ".mcp", "lock"), join(root, ".mcp", "lock.orig"));
+        symlinkSync(join(evil, "lock"), join(root, ".mcp", "lock"));
+      }
+      return (real as (...a: unknown[]) => number)(path, ...rest);
+    }) as typeof fs.openSync;
+    syncBuiltinESMExports();
+    await assert.rejects(loadLock(root), (exc: unknown) => exc instanceof LockError && exc.reason === "lock-unreadable" && /directory changed/.test(exc.detail));
+    assert.equal(swapped, true);
+  } finally {
+    fs.openSync = real;
+    syncBuiltinESMExports();
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

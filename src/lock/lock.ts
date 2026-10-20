@@ -9,7 +9,7 @@
  * file is read once; the manifest, signature and parse all use those bytes.
  */
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import { canonicalize, compareCodePoints, hasLoneSurrogate, sha256Hex } from "./digest.js";
@@ -38,6 +38,8 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SHARD_KEYS = new Set(["lockVersion", "identity", "attributes", "instructions", "tools"]);
 const ATTRIBUTE_KEYS = new Set(["version", "audience", "command", "args", "env"]);
 const ENTRY_KEYS = ["digest", "contract", "approval"];
+/** Optional tool entry members (draft 1c). */
+const ENTRY_OPTIONAL = ["metaDigest"];
 const APPROVAL_KEYS = new Set(["subject", "at", "via", "ref"]);
 export const VIA = ["pr", "runtime", "api", "migrated"] as const;
 export type Via = (typeof VIA)[number];
@@ -531,6 +533,8 @@ export interface Approval {
 export interface ToolEntry {
   readonly digest: string;
   readonly contract: string;
+  /** Digest of the top-level `_meta` approved with the tool, when it had one. */
+  readonly metaDigest?: string;
   readonly approval: Approval;
 }
 
@@ -585,25 +589,69 @@ function errCode(exc: unknown): string {
   return exc !== null && typeof exc === "object" && "code" in exc ? String((exc as { code: unknown }).code) : "";
 }
 
-function checkDir(path: string, name: string, required: boolean): boolean {
+/** A directory as it was when checked: its path, where it really is, and its dev/ino. */
+interface DirStamp {
+  readonly path: string;
+  readonly real: string;
+  readonly dev: number;
+  readonly ino: number;
+}
+
+function checkDir(path: string, name: string, required: boolean): DirStamp | null {
   let st;
   try {
     st = lstatSync(path);
   } catch (exc) {
     if (errCode(exc) === "ENOENT") {
       if (required) throw unreadable(`${name} is missing`);
-      return false;
+      return null;
     }
     throw unreadable(`${name}: ${errCode(exc) || "unreadable"}`);
   }
   if (st.isSymbolicLink() || !st.isDirectory()) throw unreadable(`${name} is not a plain directory`);
-  return true;
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch (exc) {
+    throw unreadable(`${name}: ${errCode(exc) || "unreadable"}`);
+  }
+  return { path, real, dev: st.dev, ino: st.ino };
+}
+
+/**
+ * O_NOFOLLOW guards only the last path component. After a file is open, check
+ * that its directory is still the plain directory that was checked (same
+ * dev/ino, same real path) and that the open file is the entry of that name
+ * in it. A directory swapped for a symlink between the check and the open, or
+ * swapped back after it, is refused.
+ */
+function confirmInDir(fd: number, dir: DirStamp, entry: string, name: string): void {
+  const moved = (): LockError => unreadable(`${name}: its directory changed while it was read`);
+  let st;
+  let real: string;
+  let inDir;
+  try {
+    st = lstatSync(dir.path);
+    real = realpathSync(dir.path);
+    inDir = lstatSync(join(real, entry));
+  } catch {
+    throw moved();
+  }
+  if (st.isSymbolicLink() || !st.isDirectory() || st.dev !== dir.dev || st.ino !== dir.ino || real !== dir.real) {
+    throw moved();
+  }
+  const fst = fstatSync(fd);
+  if (inDir.dev !== fst.dev || inDir.ino !== fst.ino) throw moved();
 }
 
 class MissingFile extends Error {}
 
-/** lstat, then open with O_NOFOLLOW and fstat the descriptor, then read it once. */
-function readRegular(path: string, name: string): Buffer {
+/**
+ * lstat, then open with O_NOFOLLOW, check the directory (confirmInDir) and
+ * fstat the descriptor, then read it once.
+ */
+function readRegular(dir: DirStamp, entry: string, name: string): Buffer {
+  const path = join(dir.path, entry);
   let st;
   try {
     st = lstatSync(path);
@@ -624,6 +672,7 @@ function readRegular(path: string, name: string): Buffer {
   try {
     const fst = fstatSync(fd);
     if (!fst.isFile()) throw unreadable(`${name} is not a regular file`);
+    confirmInDir(fd, dir, entry, name);
     const chunks: Buffer[] = [];
     const buf = Buffer.alloc(64 * 1024);
     for (;;) {
@@ -639,6 +688,11 @@ function readRegular(path: string, name: string): Buffer {
 
 /** Every file in `.mcp/lock`, read once. Names are checked as raw bytes for ASCII. */
 export function readLockDir(lockDir: string): Map<string, Buffer> {
+  return readLockFiles(checkDir(lockDir, ".mcp/lock", true) as DirStamp);
+}
+
+function readLockFiles(dir: DirStamp): Map<string, Buffer> {
+  const lockDir = dir.path;
   const names = readdirSync(lockDir, { encoding: "buffer" });
   for (const raw of names) {
     if (raw.some((b) => b > 0x7f)) throw unreadable(`non-ASCII filename ${repr(raw.toString("utf8"))}`);
@@ -651,7 +705,7 @@ export function readLockDir(lockDir: string): Map<string, Buffer> {
       throw unreadable(`unexpected file ${repr(name)}`);
     }
     try {
-      files.set(name, readRegular(join(lockDir, name), name));
+      files.set(name, readRegular(dir, name, name));
     } catch (exc) {
       if (exc instanceof MissingFile) throw unreadable(`${name} vanished while reading`);
       throw exc;
@@ -769,7 +823,7 @@ function checkEntry(name: string, entry: unknown, readContract: ContractReader):
   const label = repr(name);
   if (!isObject(entry)) throw unreadable(`tool ${label} entry is not an object`);
   const keys = Object.keys(entry);
-  if (keys.some((k) => !ENTRY_KEYS.includes(k))) throw unsupported(`tool ${label} members ${repr(sortedKeys(entry))}`);
+  if (keys.some((k) => !ENTRY_KEYS.includes(k) && !ENTRY_OPTIONAL.includes(k))) throw unsupported(`tool ${label} members ${repr(sortedKeys(entry))}`);
   if (!ENTRY_KEYS.every((k) => hasOwn(entry, k))) {
     throw unreadable(`tool ${label} lacks ${repr(ENTRY_KEYS.filter((k) => !hasOwn(entry, k)).sort())}`);
   }
@@ -799,6 +853,10 @@ function checkEntry(name: string, entry: unknown, readContract: ContractReader):
   if (contract !== `sha256-${hex}.json`) {
     throw new LockError("contract-mismatch", `tool ${label} contract filename differs from digest`);
   }
+  const meta = own(entry, "metaDigest");
+  if (hasOwn(entry, "metaDigest") && (typeof meta !== "string" || !DIGEST_FORM.test(meta))) {
+    throw unreadable(`tool ${label} metaDigest malformed`);
+  }
   const data = readContract(contract);
   if (data === null) throw new LockError("contract-mismatch", `tool ${label} contract file missing`);
   if (sha256Hex(data) !== hex) throw new LockError("contract-mismatch", `tool ${label} contract bytes differ from digest`);
@@ -806,7 +864,9 @@ function checkEntry(name: string, entry: unknown, readContract: ContractReader):
     typeof ref === "string"
       ? Object.freeze({ subject, at, via: via as Via, ref })
       : Object.freeze({ subject, at, via: via as Via });
-  return Object.freeze({ digest: digest as string, contract, approval: appr });
+  return typeof meta === "string"
+    ? Object.freeze({ digest: digest as string, contract, metaDigest: meta, approval: appr })
+    : Object.freeze({ digest: digest as string, contract, approval: appr });
 }
 
 /** Parse and check one shard (section 5). `filename` must already match SHARD_NAME. */
@@ -867,15 +927,13 @@ interface LockBytes {
 function readLockBytes(root: string): LockBytes {
   const mcp = join(root, ".mcp");
   checkDir(mcp, ".mcp", true);
-  const lockDir = join(mcp, "lock");
-  checkDir(lockDir, ".mcp/lock", true);
-  const contractsDir = join(mcp, "contracts");
-  const haveContracts = checkDir(contractsDir, ".mcp/contracts", false);
-  const files = readLockDir(lockDir);
+  const lockDir = checkDir(join(mcp, "lock"), ".mcp/lock", true) as DirStamp;
+  const contractsDir = checkDir(join(mcp, "contracts"), ".mcp/contracts", false);
+  const files = readLockFiles(lockDir);
   const readContract: ContractReader = (filename) => {
-    if (!haveContracts) return null;
+    if (contractsDir === null) return null;
     try {
-      return readRegular(join(contractsDir, filename), filename);
+      return readRegular(contractsDir, filename, filename);
     } catch (exc) {
       if (exc instanceof MissingFile) return null;
       throw exc;
@@ -1034,6 +1092,7 @@ export function formatShard(shard: Shard): Buffer {
       ordered([
         ["digest", entry.digest],
         ["contract", entry.contract],
+        ...(entry.metaDigest !== undefined ? [["metaDigest", entry.metaDigest] as const] : []),
         ["approval", approvalValue(entry.approval)],
       ]),
     ]);
