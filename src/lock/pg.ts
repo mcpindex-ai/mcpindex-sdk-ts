@@ -46,10 +46,12 @@
  * seq is contiguous from 1, that the head matches the last record, and that
  * every contract hashes to its digest; any failure is lock-unreadable (or
  * contract-mismatch, or lock-signature-invalid for the head signature). A load
- * whose head seq is below one this store already accepted is lock-unreadable,
- * which catches deletes of trailing records together with the head update.
- * Deleting every row for a tenant cannot be told apart from a new tenant
- * without an external anchor: keep the last seq, or require a head signature.
+ * whose head seq is below one this store instance or its sequence store
+ * already accepted is lock-unreadable, which catches deletes of trailing
+ * records together with the head update. Deleting every row for a tenant
+ * cannot be told apart from a new tenant without that external anchor, so a
+ * store with a headVerifier must also be given a sequenceStore; without one
+ * every load is lock-signature-invalid (section 8.2, draft 1c).
  * The chain has no key. Without a headVerifier, whoever can write the tables
  * (the schema owner, a superuser) can rewrite a record and recompute every
  * hash after it; only a signed head gives tamper evidence against them.
@@ -70,8 +72,8 @@
 import { canonicalize, instructionsDigest, sha256Hex } from "./digest.js";
 import { FrozenMap, LockError, identityKey, validateIdentity } from "./lock.js";
 import type { Approval, Identity, Lock, Shard, ToolEntry, Via } from "./lock.js";
-import { checkApprovalFields, prepareTool, snapshotOfError } from "./store.js";
-import type { ApproveRequest, LockSnapshot, LockStore, RevokeRequest } from "./store.js";
+import { checkApprovalFields, prepareTool, sequenceFloor, snapshotOfError } from "./store.js";
+import type { ApproveRequest, LockSnapshot, LockStore, RevokeRequest, SequenceStore } from "./store.js";
 
 export interface PgQueryResult {
   readonly rows: Array<Record<string, unknown>>;
@@ -124,6 +126,10 @@ CREATE TABLE IF NOT EXISTS mcplock.records (
   record_hash  text   NOT NULL,
   PRIMARY KEY (tenant_id, seq)
 );
+
+-- Draft 1c: digest of the approved top-level _meta. Added in place on older schemas.
+ALTER TABLE mcplock.records ADD COLUMN IF NOT EXISTS meta_digest text
+  CHECK (meta_digest IS NULL OR meta_digest ~ '^sha256:[0-9a-f]{64}$');
 
 CREATE TABLE IF NOT EXISTS mcplock.heads (
   tenant_id  text        PRIMARY KEY,
@@ -250,6 +256,7 @@ interface RecordRow {
   toolName: string | null;
   digest: string | null;
   contract: Buffer | null;
+  metaDigest: string | null;
   subject: string;
   via: Via;
   ref: string | null;
@@ -259,7 +266,9 @@ interface RecordRow {
 }
 
 function recordHash(tenant: string, r: Omit<RecordRow, "recordHash">): string {
-  const body = canonicalize({
+  // metaDigest joins the hashed fields only when set, so records written
+  // before draft 1c keep the hash they were written with.
+  const fields: Record<string, unknown> = {
     tenant,
     seq: r.seq,
     op: r.op,
@@ -271,7 +280,9 @@ function recordHash(tenant: string, r: Omit<RecordRow, "recordHash">): string {
     via: r.via,
     ref: r.ref,
     at: r.at,
-  });
+  };
+  if (r.metaDigest !== null) fields.metaDigest = r.metaDigest;
+  const body = canonicalize(fields);
   return "sha256:" + sha256Hex(`${r.prevHash}\n${body}`);
 }
 
@@ -288,6 +299,7 @@ function toRow(raw: Record<string, unknown>): RecordRow {
     toolName: raw.tool_name === null ? null : String(raw.tool_name),
     digest: raw.digest === null ? null : String(raw.digest),
     contract: contract === null || contract === undefined ? null : Buffer.from(contract as Uint8Array),
+    metaDigest: raw.meta_digest === null || raw.meta_digest === undefined ? null : String(raw.meta_digest),
     subject: String(raw.subject),
     via: raw.via as Via,
     ref: raw.ref === null ? null : String(raw.ref),
@@ -309,8 +321,12 @@ export interface PgLockStoreOptions {
   readonly headSigner?: HeadSigner;
   /** With a verifier set, a head without a valid signature is lock-signature-invalid. */
   readonly headVerifier?: HeadVerifier;
-  /** Lowest head seq to accept, from the host's own state. Raised in memory on each load. */
-  readonly lastSeq?: number;
+  /**
+   * Host-owned record of the highest head seq accepted (see fileSequenceStore
+   * in ./store.js). Required with headVerifier. Each load also keeps an
+   * in-memory floor and refuses any lower seq.
+   */
+  readonly sequenceStore?: SequenceStore;
   /** For messages only: replaced by its redacted form in any error text. */
   readonly dsn?: string;
   readonly now?: () => number;
@@ -332,7 +348,8 @@ export class PgLockStore implements LockStore {
   readonly #dsn: string | undefined;
   readonly #now: () => number;
   readonly #tenancy: PgTenancy;
-  #lastSeq: number;
+  readonly #sequences: SequenceStore | undefined;
+  #lastSeq = 0;
 
   constructor(options: PgLockStoreOptions) {
     const p = options.principal;
@@ -347,7 +364,7 @@ export class PgLockStore implements LockStore {
     this.#verifier = options.headVerifier;
     this.#dsn = options.dsn;
     this.#now = options.now ?? Date.now;
-    this.#lastSeq = options.lastSeq ?? 0;
+    this.#sequences = options.sequenceStore;
     const tenancy = options.tenancy ?? "app-scoped";
     if (tenancy !== "app-scoped" && tenancy !== "role-bound") throw new Error(`unknown tenancy ${String(tenancy)}`);
     this.#tenancy = tenancy;
@@ -398,7 +415,7 @@ export class PgLockStore implements LockStore {
         ? null
         : { seq: Number(h.seq), hash: String(h.head_hash), signature: h.signature === null ? null : String(h.signature) };
     const recRes = await c.query(
-      `SELECT seq, op, identity_key, tool_name, digest, contract, subject, via, ref, at, prev_hash, record_hash
+      `SELECT seq, op, identity_key, tool_name, digest, contract, meta_digest, subject, via, ref, at, prev_hash, record_hash
          FROM mcplock.records WHERE tenant_id = $1 ORDER BY seq`,
       [this.#tenant],
     );
@@ -448,9 +465,15 @@ export class PgLockStore implements LockStore {
           r.ref === null
             ? Object.freeze({ subject: r.subject, at: r.at, via: r.via })
             : Object.freeze({ subject: r.subject, at: r.at, via: r.via, ref: r.ref });
+        if (r.metaDigest !== null && !/^sha256:[0-9a-f]{64}$/.test(r.metaDigest)) {
+          throw new LockError("lock-unreadable", `record ${r.seq} metaDigest malformed`);
+        }
+        const contract = `sha256-${r.digest.slice(7)}.json`;
         shard.tools.set(
           r.toolName,
-          Object.freeze({ digest: r.digest, contract: `sha256-${r.digest.slice(7)}.json`, approval }),
+          r.metaDigest === null
+            ? Object.freeze({ digest: r.digest, contract, approval })
+            : Object.freeze({ digest: r.digest, contract, metaDigest: r.metaDigest, approval }),
         );
       } else if (r.toolName === null) {
         shard.instructions = null;
@@ -480,10 +503,33 @@ export class PgLockStore implements LockStore {
 
   async loadSnapshot(): Promise<LockSnapshot> {
     const loadedAt = this.#now();
+    if (this.#verifier !== undefined && this.#sequences === undefined) {
+      return snapshotOfError(
+        new LockError(
+          "lock-signature-invalid",
+          "a head verifier is configured but the host config names no sequence store; rollback cannot be refused",
+        ),
+        loadedAt,
+      );
+    }
+    let stored: number | null = null;
+    try {
+      stored = this.#sequences?.read() ?? null;
+    } catch (exc) {
+      return snapshotOfError(new LockError("lock-signature-invalid", (exc as Error).message ?? "sequence unreadable"), loadedAt);
+    }
+    this.#lastSeq = sequenceFloor(stored, this.#lastSeq) ?? 0;
     const state = await this.#tx("read", (c) => this.#readState(c, false));
     try {
       const { lock, snapshotId, seq } = await this.#fold(state.head, state.rows);
-      if (seq > this.#lastSeq) this.#lastSeq = seq;
+      if (seq > this.#lastSeq) {
+        this.#lastSeq = seq;
+        try {
+          this.#sequences?.write(seq);
+        } catch {
+          // The in-memory floor still holds; see FileLockStore.loadSnapshot.
+        }
+      }
       return Object.freeze({ snapshotId, loadedAt, lock });
     } catch (exc) {
       if (exc instanceof LockError) return snapshotOfError(exc, loadedAt);
@@ -493,7 +539,14 @@ export class PgLockStore implements LockStore {
 
   async #append(
     identity: Identity,
-    record: { op: "approve" | "revoke"; toolName: string | null; digest: string | null; contract: Buffer | null; approval: Approval },
+    record: {
+      op: "approve" | "revoke";
+      toolName: string | null;
+      digest: string | null;
+      contract: Buffer | null;
+      metaDigest: string | null;
+      approval: Approval;
+    },
     precondition: (lock: Lock) => void,
   ): Promise<void> {
     const ident = validateIdentity(identity);
@@ -521,6 +574,7 @@ export class PgLockStore implements LockStore {
         toolName: record.toolName,
         digest: record.digest,
         contract: record.contract,
+        metaDigest: record.metaDigest,
         subject: record.approval.subject,
         via: record.approval.via,
         ref: record.approval.ref ?? null,
@@ -530,9 +584,24 @@ export class PgLockStore implements LockStore {
       const hash = recordHash(this.#tenant, row);
       await c.query(
         `INSERT INTO mcplock.records
-           (tenant_id, seq, op, identity_key, tool_name, digest, contract, subject, via, ref, at, prev_hash, record_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-        [this.#tenant, seq, row.op, key, row.toolName, row.digest, row.contract, row.subject, row.via, row.ref, row.at, prevHash, hash],
+           (tenant_id, seq, op, identity_key, tool_name, digest, contract, meta_digest, subject, via, ref, at, prev_hash, record_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          this.#tenant,
+          seq,
+          row.op,
+          key,
+          row.toolName,
+          row.digest,
+          row.contract,
+          row.metaDigest,
+          row.subject,
+          row.via,
+          row.ref,
+          row.at,
+          prevHash,
+          hash,
+        ],
       );
       const signature = this.#signer ? await this.#signer.sign(headPayload(this.#tenant, seq, hash)) : null;
       await c.query(
@@ -547,12 +616,12 @@ export class PgLockStore implements LockStore {
     const approval = checkApprovalFields(request, this.#subject);
     if ("tool" in request) {
       const p = prepareTool(request.tool);
-      await this.#append(request.identity, { op: "approve", toolName: p.name, digest: p.digest, contract: p.body, approval }, () => undefined);
+      await this.#append(request.identity, { op: "approve", toolName: p.name, digest: p.digest, contract: p.body, metaDigest: p.metaDigest, approval }, () => undefined);
       return;
     }
     const digest = instructionsDigest(request.instructions);
     if (digest === null) throw new Error("instructions have no digest; they cannot be approved");
-    await this.#append(request.identity, { op: "approve", toolName: null, digest, contract: null, approval }, () => undefined);
+    await this.#append(request.identity, { op: "approve", toolName: null, digest, contract: null, metaDigest: null, approval }, () => undefined);
   }
 
   async revoke(request: RevokeRequest): Promise<void> {
@@ -560,7 +629,7 @@ export class PgLockStore implements LockStore {
     const key = identityKey(ident);
     const approval = checkApprovalFields({ identity: ident, via: "api" }, this.#subject);
     const toolName = "tool" in request ? request.tool : null;
-    await this.#append(ident, { op: "revoke", toolName, digest: null, contract: null, approval }, (lock) => {
+    await this.#append(ident, { op: "revoke", toolName, digest: null, contract: null, metaDigest: null, approval }, (lock) => {
       const shard = lock.shards.get(key);
       if (shard === undefined) throw new Error("no approvals for this identity");
       if (toolName === null ? shard.instructions === null : !shard.tools.has(toolName)) {

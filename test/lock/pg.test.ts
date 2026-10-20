@@ -21,7 +21,8 @@ import {
   redactDsn,
 } from "../../src/lock/pg.js";
 import type { HeadSigner, HeadVerifier, PgPoolLike } from "../../src/lock/pg.js";
-import { runLockStoreConformance } from "../../src/lock/store.js";
+import { runLockStoreConformance } from "./conformance.js";
+import type { SequenceStore } from "../../src/lock/store.js";
 import { checkListing } from "../../src/lock/check.js";
 import { LockError } from "../../src/lock/lock.js";
 import type { Identity, Lock } from "../../src/lock/lock.js";
@@ -40,6 +41,18 @@ function localOnly(url: string): string | null {
   }
 }
 
+function memorySequence(): SequenceStore & { value: number | null } {
+  return {
+    value: null,
+    read() {
+      return this.value;
+    },
+    write(n: number) {
+      this.value = n;
+    },
+  };
+}
+
 const skip = URL_ENV === undefined ? "MCPLOCK_TEST_PG_URL is not set (point it at a local throwaway Postgres)" : localOnly(URL_ENV);
 
 test("redactDsn hides passwords in URL and keyword forms", () => {
@@ -55,6 +68,18 @@ test("PgLockStore needs an authenticated principal with a tenant id", () => {
   assert.throws(() => new PgLockStore({ pool, principal: { tenantId: "", subject: "s" } }));
   assert.throws(() => new PgLockStore({ pool, principal: { tenantId: "a b", subject: "s" } }));
   assert.throws(() => new PgLockStore({ pool, principal: { tenantId: "t", subject: "" } }));
+});
+
+test("S4: a head verifier without a sequence store is refused at load, before any query", async () => {
+  let connects = 0;
+  const pool = { connect: async () => (connects++, Promise.reject(new Error("unused"))) } as PgPoolLike;
+  const verifier: HeadVerifier = { verify: async () => true };
+  const store = new PgLockStore({ pool, principal: { tenantId: "t", subject: "s" }, headVerifier: verifier });
+  const snap = await store.loadSnapshot();
+  assert.ok(snap.lock instanceof LockError);
+  assert.equal(snap.lock.reason, "lock-signature-invalid");
+  assert.match(snap.lock.detail, /sequence store/);
+  assert.equal(connects, 0);
 });
 
 test("an unreachable database surfaces without the DSN", async () => {
@@ -208,14 +233,57 @@ test("Postgres store", { skip: skip ?? false }, async (t) => {
       const verifier: HeadVerifier = { verify: async (p, s) => createHmac("sha256", key).update(p).digest("hex") === s };
       const tid = tenant();
       await new PgLockStore({ pool: approver, principal: { tenantId: tid, subject: "a" }, headSigner: signer }).approve({ identity: ID, tool: TOOL, via: "api" });
-      const reader = new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" }, headVerifier: verifier });
+      const seq = memorySequence();
+      const reader = new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" }, headVerifier: verifier, sequenceStore: seq });
       assert.ok(!((await reader.loadSnapshot()).lock instanceof LockError));
+      assert.equal(seq.value, 1);
       await exec("UPDATE mcplock.heads SET signature = 'forged' WHERE tenant_id = $1", [tid]);
       const snap = await reader.loadSnapshot();
       assert.ok(snap.lock instanceof LockError && snap.lock.reason === "lock-signature-invalid");
-      const unsigned = new PgLockStore({ pool: runtime, principal: { tenantId: tenant(), subject: "r" }, headVerifier: verifier });
+      const unsigned = new PgLockStore({
+        pool: runtime,
+        principal: { tenantId: tenant(), subject: "r" },
+        headVerifier: verifier,
+        sequenceStore: memorySequence(),
+      });
       const empty = await unsigned.loadSnapshot();
       assert.ok(empty.lock instanceof LockError && empty.lock.reason === "lock-signature-invalid");
+    });
+
+    await t.test("a persisted sequence floor refuses a rewound head on a fresh store instance", async () => {
+      const tid = tenant();
+      const w = new PgLockStore({ pool: approver, principal: { tenantId: tid, subject: "a" } });
+      await w.approve({ identity: ID, tool: TOOL, via: "api" });
+      await w.approve({ identity: ID, tool: { ...TOOL, name: "two" }, via: "api" });
+      const seq = memorySequence();
+      assert.ok(!((await new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" }, sequenceStore: seq }).loadSnapshot()).lock instanceof LockError));
+      assert.equal(seq.value, 2);
+      const rows = await exec("SELECT record_hash FROM mcplock.records WHERE tenant_id = $1 AND seq = 1", [tid]);
+      await exec("DELETE FROM mcplock.records WHERE tenant_id = $1 AND seq = 2", [tid]);
+      await exec("UPDATE mcplock.heads SET seq = 1, head_hash = $2 WHERE tenant_id = $1", [tid, rows[0]?.record_hash]);
+      const restarted = new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" }, sequenceStore: seq });
+      const snap = await restarted.loadSnapshot();
+      assert.ok(snap.lock instanceof LockError && snap.lock.reason === "lock-unreadable");
+    });
+
+    await t.test("metaDigest is recorded with an approval and survives the chain check", async () => {
+      const tid = tenant();
+      const s = new PgLockStore({ pool: approver, principal: { tenantId: tid, subject: "a" } });
+      const withMeta = { ...TOOL, name: "m", _meta: { ui: { resourceUri: "ui://a" } } };
+      await s.approve({ identity: ID, tool: withMeta, via: "api" });
+      await s.approve({ identity: ID, tool: TOOL, via: "api" });
+      const snap = await new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" } }).loadSnapshot();
+      assert.ok(!(snap.lock instanceof LockError), String((snap.lock as LockError).detail));
+      const shard = [...(snap.lock as Lock).shards.values()][0];
+      assert.match(shard?.tools.get("m")?.metaDigest ?? "", /^sha256:[0-9a-f]{64}$/);
+      assert.equal(shard?.tools.get("search")?.metaDigest, undefined);
+      const d = checkListing(snap.lock, ID, { tools: [withMeta, { ...TOOL, _meta: { x: 1 } }] }, "guard");
+      assert.equal(d.meta.get("m"), undefined);
+      assert.equal(d.meta.get("search"), "meta-unapproved");
+      // Tampering with the stored metaDigest breaks the chain.
+      await exec("UPDATE mcplock.records SET meta_digest = $2 WHERE tenant_id = $1 AND seq = 1", [tid, "sha256:" + "1".repeat(64)]);
+      const bad = await new PgLockStore({ pool: runtime, principal: { tenantId: tid, subject: "r" } }).loadSnapshot();
+      assert.ok(bad.lock instanceof LockError && bad.lock.reason === "lock-unreadable");
     });
 
     await t.test("snapshot id is the head hash and changes on every approval", async () => {

@@ -155,6 +155,7 @@
     "*providers*",
     "*parity_sample*",
     "dist/test/*",
+    "*conformance*",
     "test/*",
     "*.test.*",
     "*.tsbuildinfo",

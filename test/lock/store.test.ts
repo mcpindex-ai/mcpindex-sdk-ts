@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { FileLockStore, runLockStoreConformance } from "../../src/lock/store.js";
+import { FileLockStore } from "../../src/lock/store.js";
+import { runLockStoreConformance } from "./conformance.js";
 import { LockError, loadLock, shardFilename } from "../../src/lock/lock.js";
 import type { Identity } from "../../src/lock/lock.js";
 
@@ -125,27 +126,85 @@ test("the store refuses to write onto a lock that does not load, and leaves no t
   }
 });
 
-test("a signed store tracks the accepted sequence across loads and reports it", async () => {
+test("a signed store keeps the accepted sequence in its sequence file and in memory", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "mcplock-store-"));
   try {
     const root = join(tmp, "case");
     cpSync(join(VECTORS, "manifest-ok"), root, { recursive: true });
     writeFileSync(join(root, ".mcp", "lock", "MANIFEST.json.sigstore"), "{}");
-    const seen: number[] = [];
     const signer = { issuer: "https://issuer.example", san: "https://example/sign@refs/heads/main" };
-    const store = new FileLockStore({ root, signer, verifier: { verify: async () => true }, onSequence: (s) => seen.push(s) });
+    const sequencePath = join(tmp, "sequence");
+    const store = new FileLockStore({ root, signer, verifier: { verify: async () => true }, sequencePath });
     const first = await store.loadSnapshot();
     assert.ok(!(first.lock instanceof LockError));
     const seq = (first.lock as { sequence: number }).sequence;
-    assert.deepEqual(seen, [seq]);
-    // Roll the manifest back by one: the in-memory floor refuses it.
+    assert.equal(readFileSync(sequencePath, "ascii"), `${seq}\n`);
+    // Roll the manifest back by one: refused.
     const mPath = join(root, ".mcp", "lock", "MANIFEST.json");
     const text = readFileSync(mPath, "utf8").replace(`"sequence": ${seq}`, `"sequence": ${seq - 1}`);
     writeFileSync(mPath, text);
     const second = await store.loadSnapshot();
     assert.ok(second.lock instanceof LockError && second.lock.reason === "lock-signature-invalid");
+    // A fresh store instance reads the floor from the file.
+    const restarted = new FileLockStore({ root, signer, verifier: { verify: async () => true }, sequencePath });
+    const third = await restarted.loadSnapshot();
+    assert.ok(third.lock instanceof LockError && third.lock.reason === "lock-signature-invalid");
+    // The in-memory floor holds even when the file is reset under the store.
+    rmSync(sequencePath);
+    const fourth = await store.loadSnapshot();
+    assert.ok(fourth.lock instanceof LockError && fourth.lock.reason === "lock-signature-invalid");
     assert.ok(existsSync(mPath));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a signer without a sequence store is refused at load as lock-signature-invalid", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "mcplock-store-"));
+  try {
+    const root = join(tmp, "case");
+    cpSync(join(VECTORS, "manifest-ok"), root, { recursive: true });
+    writeFileSync(join(root, ".mcp", "lock", "MANIFEST.json.sigstore"), "{}");
+    const signer = { issuer: "https://issuer.example", san: "https://example/sign@refs/heads/main" };
+    const store = new FileLockStore({ root, signer, verifier: { verify: async () => true } });
+    const snap = await store.loadSnapshot();
+    assert.ok(snap.lock instanceof LockError);
+    assert.equal(snap.lock.reason, "lock-signature-invalid");
+    assert.match(snap.lock.detail, /sequence store/);
+    // A sequence file that does not hold digits fails closed too.
+    const bad = join(tmp, "seq");
+    writeFileSync(bad, "seven\n");
+    const store2 = new FileLockStore({ root, signer, verifier: { verify: async () => true }, sequencePath: bad });
+    const snap2 = await store2.loadSnapshot();
+    assert.ok(snap2.lock instanceof LockError && snap2.lock.reason === "lock-signature-invalid");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("the writer adds a manifest when the host requires or signs one, as the Python store does", async () => {
+  for (const extra of [{ requireManifest: true }, { signer: { issuer: "i", san: "s" }, sequencePath: "/nonexistent/seq" }]) {
+    const r = emptyRoot();
+    try {
+      const store = new FileLockStore({ root: r.root, ...extra });
+      await store.approve({ identity: REMOTE, tool: { name: "a", inputSchema: { type: "object" } }, ...APPROVAL });
+      const manifest = JSON.parse(readFileSync(join(r.root, ".mcp", "lock", "MANIFEST.json"), "utf8")) as { sequence: number };
+      assert.equal(manifest.sequence, 1);
+      const loaded = await loadLock(r.root, { requireManifest: true });
+      assert.equal(loaded.lock.sequence, 1);
+    } finally {
+      r.done();
+    }
+  }
+  const plain = emptyRoot();
+  try {
+    await new FileLockStore({ root: plain.root }).approve({
+      identity: REMOTE,
+      tool: { name: "a", inputSchema: { type: "object" } },
+      ...APPROVAL,
+    });
+    assert.equal(existsSync(join(plain.root, ".mcp", "lock", "MANIFEST.json")), false);
+  } finally {
+    plain.done();
   }
 });

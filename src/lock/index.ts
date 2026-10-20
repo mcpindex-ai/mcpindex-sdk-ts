@@ -13,6 +13,7 @@ export {
   canonicalize,
   hasLoneSurrogate,
   instructionsDigest,
+  metaDigest,
   toolDigest,
   toolSetDigest,
 } from "./digest.js";
@@ -67,6 +68,7 @@ export type {
 } from "./lock.js";
 export {
   CallGate,
+  DEFAULT_MAX_STALENESS_MS,
   LOCK_REFUSAL_CODE,
   LOCK_REFUSAL_MESSAGE,
   LockRefusal,
@@ -76,22 +78,21 @@ export {
   isPosture,
   refusalError,
 } from "./check.js";
-export type { CallGateOptions, CallReason, Decision, Listing, RefusalError, ToolOutcome, ToolReason } from "./check.js";
-export { FileLockStore, nowRfc3339, prepareTool, runLockStoreConformance } from "./store.js";
+export type { CallGateOptions, CallReason, Decision, Listing, MetaReason, RefusalError, ToolOutcome, ToolReason } from "./check.js";
+export { FileLockStore, fileSequenceStore, nowRfc3339, prepareTool } from "./store.js";
 export type {
   ApproveInstructionsRequest,
   ApproveRequest,
   ApproveToolRequest,
-  ConformanceOptions,
-  ConformanceResult,
   FileLockStoreOptions,
   LockSnapshot,
   LockStore,
   RevokeRequest,
+  SequenceStore,
 } from "./store.js";
 export { EVENT_SCHEMA, approvalEvent, jsonlFileSink, listingEvent, refusalEvent } from "./events.js";
 export type { ApprovalEvent, EventContext, ListingEvent, LockEvent, LockEventSink, RefusalEvent } from "./events.js";
-export { DEFAULT_MAX_STALENESS_MS, LockedTransport, MAX_LIST_PAGES, MAX_LIST_TOOLS, MAX_OUTSTANDING, lockClient } from "./rawList.js";
+export { LockedTransport, MAX_LIST_PAGES, MAX_LIST_TOOLS, MAX_OUTSTANDING, lockClient } from "./rawList.js";
 export type { ConnectableClient, LockOptions } from "./rawList.js";
 export { anchoredPattern, sigstoreVerifier } from "./signing.js";
 export type { SigstoreVerifierOptions } from "./signing.js";

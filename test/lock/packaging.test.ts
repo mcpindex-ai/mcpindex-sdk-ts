@@ -63,6 +63,14 @@ test("the package resolves its own subpaths", async () => {
   assert.equal(typeof pg.MIGRATION_SQL, "string");
 });
 
+test("the store conformance suite is test code: not exported, not in the shipped store module, denied by the allowlist", async () => {
+  const lock = (await import("@mcp-index/sdk/lock")) as Record<string, unknown>;
+  assert.equal(lock.runLockStoreConformance, undefined);
+  assert.ok(!/runLockStoreConformance/.test(readFileSync(join(ROOT, "dist", "src", "lock", "store.js"), "utf8")));
+  const deny = (JSON.parse(readFileSync(join(ROOT, "scripts", "ship-allowlist.json"), "utf8")) as { deny: string[] }).deny;
+  assert.ok(deny.includes("*conformance*"));
+});
+
 test("subpath ./ai: types and import entries, @ai-sdk/mcp an optional peer, engines floor unchanged", () => {
   assert.deepEqual(pkg.exports["./ai"], { types: "./dist/src/ai.d.ts", import: "./dist/src/ai.js" });
   assert.equal(pkg.peerDependenciesMeta?.["@ai-sdk/mcp"]?.optional, true);
