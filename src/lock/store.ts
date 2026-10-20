@@ -14,9 +14,9 @@
  * never holds a partial file.
  */
 
-import { closeSync, constants, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { canonicalBody, instructionsDigest, metaDigest, toolDigest } from "./digest.js";
 import {
@@ -35,6 +35,7 @@ import {
 } from "./lock.js";
 import type { Approval, Identity, Lock, ManifestVerifier, ReaderConfig, Shard, SignerIdentity, ToolEntry, Via } from "./lock.js";
 import { withExclusiveLock } from "../fileLock.js";
+import { sigstoreVerifier } from "./signing.js";
 
 export interface LockSnapshot {
   readonly snapshotId: string;
@@ -158,6 +159,80 @@ export function fileSequenceStore(path: string): SequenceStore {
   };
 }
 
+// Host configuration paths ---------------------------------------------------
+
+/** A host configuration the host must not run with. Thrown when a store is constructed. */
+export class HostConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostConfigError";
+  }
+}
+
+function exists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** realpath of the nearest existing ancestor, with the rest of the path appended. */
+function resolvedPath(path: string): string {
+  const rest: string[] = [];
+  let probe = resolve(path);
+  while (!exists(probe) && dirname(probe) !== probe) {
+    rest.unshift(basename(probe));
+    probe = dirname(probe);
+  }
+  let real: string;
+  try {
+    real = realpathSync(probe);
+  } catch {
+    real = probe;
+  }
+  return rest.length === 0 ? real : join(real, ...rest);
+}
+
+function within(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * The repository that holds the lock (section 8.2): the nearest directory at
+ * or above the lock root with a `.git` entry (a directory, or a file as in a
+ * worktree), else the lock root. Returned resolved.
+ */
+export function repositoryRoot(lockRoot: string): string {
+  const start = resolvedPath(lockRoot);
+  for (let dir = start; ; dir = dirname(dir)) {
+    if (exists(join(dir, ".git"))) return dir;
+    if (dirname(dir) === dir) return start;
+  }
+}
+
+/**
+ * Null if every named host path lies outside the repository that holds the
+ * lock, else what is wrong. Each path is checked as given (made absolute) and
+ * resolved, against the repository root as found and the lock root as given.
+ */
+export function hostPathProblem(lockRoot: string, paths: Readonly<Record<string, string | null | undefined>>): string | null {
+  const repo = repositoryRoot(lockRoot);
+  const roots = [repo, resolve(lockRoot)];
+  for (const [key, value] of Object.entries(paths)) {
+    if (value === null || value === undefined) continue;
+    const given = resolve(value);
+    for (const candidate of [given, resolvedPath(given)]) {
+      if (roots.some((root) => within(candidate, root))) {
+        return `${key} lies inside the repository that holds the lock (${repo}); whoever writes the lock could choose it`;
+      }
+    }
+  }
+  return null;
+}
+
 // File store ---------------------------------------------------------------
 
 export interface FileLockStoreOptions {
@@ -172,7 +247,16 @@ export interface FileLockStoreOptions {
    */
   readonly signer?: SignerIdentity | null;
   readonly verifier?: ManifestVerifier | null;
-  /** Host-owned file for the last accepted sequence (see fileSequenceStore). */
+  /**
+   * Sigstore trusted_root.json from host configuration. Without `verifier`,
+   * the store verifies with sigstoreVerifier over this file. It must lie
+   * outside the repository that holds the lock (section 8.2).
+   */
+  readonly trustedRootPath?: string;
+  /**
+   * Host-owned file for the last accepted sequence (see fileSequenceStore).
+   * It must lie outside the repository that holds the lock.
+   */
   readonly sequencePath?: string;
   /** Or any other place the host keeps it. Takes precedence over sequencePath. */
   readonly sequenceStore?: SequenceStore;
@@ -216,12 +300,21 @@ export class FileLockStore implements LockStore {
   /** In-memory floor for this store instance; never lowered. */
   #lastSequence: number | null = null;
   readonly #now: () => number;
+  readonly #verifier: ManifestVerifier | null;
 
+  /** Throws HostConfigError when sequencePath or trustedRootPath lies inside the lock's repository. */
   constructor(options: FileLockStoreOptions) {
+    const problem = hostPathProblem(options.root, {
+      sequencePath: options.sequencePath,
+      trustedRootPath: options.trustedRootPath,
+    });
+    if (problem !== null) throw new HostConfigError(problem);
     this.#root = options.root;
     this.#config = options;
     this.#sequences =
       options.sequenceStore ?? (options.sequencePath !== undefined ? fileSequenceStore(options.sequencePath) : null);
+    this.#verifier =
+      options.verifier ?? (options.trustedRootPath !== undefined ? sigstoreVerifier({ trustedRootPath: options.trustedRootPath }) : null);
     this.#now = options.now ?? Date.now;
   }
 
@@ -249,7 +342,7 @@ export class FileLockStore implements LockStore {
         requireManifest: this.#config.requireManifest ?? false,
         signer,
         sequenceStore: this.#sequences !== null,
-        verifier: this.#config.verifier ?? null,
+        verifier: this.#verifier,
         lastSequence: last,
       };
       const loaded = await loadLock(this.#root, config);
