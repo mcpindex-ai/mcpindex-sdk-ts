@@ -14,9 +14,9 @@
  * never holds a partial file.
  */
 
-import { closeSync, constants, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 
 import { canonicalBody, instructionsDigest, metaDigest, toolDigest } from "./digest.js";
 import {
@@ -178,56 +178,136 @@ function exists(path: string): boolean {
   }
 }
 
-/** realpath of the nearest existing ancestor, with the rest of the path appended. */
-function resolvedPath(path: string): string {
-  const rest: string[] = [];
-  let probe = resolve(path);
-  while (!exists(probe) && dirname(probe) !== probe) {
-    rest.unshift(basename(probe));
-    probe = dirname(probe);
-  }
-  let real: string;
+/** (st_dev, st_ino) of what `path` resolves to, or null when it does not resolve. */
+function identity(path: string): string | null {
   try {
-    real = realpathSync(probe);
+    const st = statSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}`;
   } catch {
-    real = probe;
+    return null;
   }
-  return rest.length === 0 ? real : join(real, ...rest);
 }
 
-function within(path: string, root: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
 }
 
 /**
- * The repository that holds the lock (section 8.2): the nearest directory at
- * or above the lock root with a `.git` entry (a directory, or a file as in a
- * worktree), else the lock root. Returned resolved.
+ * One host path walked without lexical normalization (section 8.2, draft
+ * 1e). A relative path gets the working directory prefixed as a string, so a
+ * `..` is left for the operating system: after a symlink it goes up from the
+ * link's target. The longest existing leading part is resolved with
+ * realpath(3) and the rest appended only when it holds no `..`.
+ */
+function walkHostPath(value: string): { refusal: string | null; chain: string[]; resolved: string } {
+  const absolute = isAbsolute(value) ? value : `${process.cwd()}${sep}${value}`;
+  const root = parse(absolute).root || sep;
+  const parts = absolute.slice(root.length).split(/[\\/]+/).filter((p) => p !== "" && p !== ".");
+  const prefixes = [root];
+  for (const part of parts) {
+    const last = prefixes[prefixes.length - 1] as string;
+    prefixes.push(last.endsWith(sep) ? `${last}${part}` : `${last}${sep}${part}`);
+  }
+  let existing = 0;
+  while (existing + 1 < prefixes.length && identity(prefixes[existing + 1] as string) !== null) existing += 1;
+  const real = realpathOrSelf(prefixes[existing] as string);
+  const rest = parts.slice(existing);
+  if (existing + 1 < prefixes.length && exists(prefixes[existing + 1] as string)) {
+    return { refusal: "is a symbolic link that does not resolve", chain: [], resolved: real };
+  }
+  if (rest.includes("..")) return { refusal: "has a .. below the part that exists", chain: [], resolved: real };
+  const chain = prefixes.slice(0, existing + 1);
+  for (let dir = real; ; dir = dirname(dir)) {
+    chain.push(dir);
+    if (dirname(dir) === dir) break;
+  }
+  return { refusal: null, chain, resolved: rest.length === 0 ? real : join(real, ...rest) };
+}
+
+/**
+ * Where the system puts a host path: realpath of its longest existing part
+ * with the rest appended. FileLockStore opens this form, so the file it
+ * writes is the one hostPathProblem checked.
+ */
+export function resolvedHostPath(value: string): string {
+  return walkHostPath(value).resolved;
+}
+
+/**
+ * What a `.git` file points at: "module" when its gitdir lies under
+ * `modules` inside a git directory (a submodule), "worktree" when under
+ * `worktrees` (a linked worktree), else "unknown".
+ */
+function gitFileKind(path: string): "module" | "worktree" | "unknown" {
+  let text: string;
+  try {
+    text = readFileSync(path).subarray(0, 4096).toString("utf8");
+  } catch {
+    return "unknown";
+  }
+  const line = text.split(/\r?\n/)[0] ?? "";
+  if (!line.startsWith("gitdir:")) return "unknown";
+  const target = resolve(dirname(path), line.slice("gitdir:".length).trim());
+  const parts = target.split(sep);
+  const at = parts.lastIndexOf(".git");
+  if (at < 0) return "unknown";
+  const tail = parts.slice(at + 1);
+  if (tail.includes("modules")) return "module";
+  if (tail[0] === "worktrees") return "worktree";
+  return "unknown";
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The repository that holds the lock (section 8.2, draft 1e), walking up
+ * from the resolved lock root. A `.git` directory ends the walk, and so does
+ * a `.git` file pointing into a git directory's `worktrees/` (a linked
+ * worktree's top). Any other `.git` file, a submodule's or one that names
+ * neither, is a candidate: the walk goes on so a submodule resolves to its
+ * superproject, and the candidate stands when nothing above has a `.git`
+ * entry. With no entry at all the repository is the lock root, and only the
+ * lock root is protected.
  */
 export function repositoryRoot(lockRoot: string): string {
-  const start = resolvedPath(lockRoot);
+  const start = resolvedHostPath(lockRoot);
+  let candidate: string | null = null;
   for (let dir = start; ; dir = dirname(dir)) {
-    if (exists(join(dir, ".git"))) return dir;
-    if (dirname(dir) === dir) return start;
+    const git = join(dir, ".git");
+    if (exists(git)) {
+      if (isDirectory(git) || gitFileKind(git) === "worktree") return dir;
+      candidate ??= dir;
+    }
+    if (dirname(dir) === dir) return candidate ?? start;
   }
 }
 
 /**
  * Null if every named host path lies outside the repository that holds the
- * lock, else what is wrong. Each path is checked as given (made absolute) and
- * resolved, against the repository root as found and the lock root as given.
+ * lock and the lock root, else what is wrong. Inside means an existing
+ * leading part of the path as given, or an ancestor of its resolved form, is
+ * the same directory (device and inode) as the repository root or the lock
+ * root.
  */
 export function hostPathProblem(lockRoot: string, paths: Readonly<Record<string, string | null | undefined>>): string | null {
   const repo = repositoryRoot(lockRoot);
-  const roots = [repo, resolve(lockRoot)];
+  const roots = new Set([identity(repo), identity(lockRoot)].filter((i): i is string => i !== null));
   for (const [key, value] of Object.entries(paths)) {
     if (value === null || value === undefined) continue;
-    const given = resolve(value);
-    for (const candidate of [given, resolvedPath(given)]) {
-      if (roots.some((root) => within(candidate, root))) {
-        return `${key} lies inside the repository that holds the lock (${repo}); whoever writes the lock could choose it`;
-      }
+    const { refusal, chain } = walkHostPath(value);
+    if (refusal !== null) return `${key} ${refusal}`;
+    if (chain.some((dir) => roots.has(identity(dir) ?? ""))) {
+      return `${key} lies inside the repository that holds the lock (${repo}); whoever writes the lock could choose it`;
     }
   }
   return null;
@@ -311,10 +391,15 @@ export class FileLockStore implements LockStore {
     if (problem !== null) throw new HostConfigError(problem);
     this.#root = options.root;
     this.#config = options;
+    // The resolved forms: the files opened are the ones the path rule checked.
     this.#sequences =
-      options.sequenceStore ?? (options.sequencePath !== undefined ? fileSequenceStore(options.sequencePath) : null);
+      options.sequenceStore ??
+      (options.sequencePath !== undefined ? fileSequenceStore(resolvedHostPath(options.sequencePath)) : null);
     this.#verifier =
-      options.verifier ?? (options.trustedRootPath !== undefined ? sigstoreVerifier({ trustedRootPath: options.trustedRootPath }) : null);
+      options.verifier ??
+      (options.trustedRootPath !== undefined
+        ? sigstoreVerifier({ trustedRootPath: resolvedHostPath(options.trustedRootPath) })
+        : null);
     this.#now = options.now ?? Date.now;
   }
 

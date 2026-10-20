@@ -118,5 +118,87 @@
     ],
     "trustedRoot": "repo/out/trusted_root.json",
     "expect": "refuse"
+  },
+  {
+    "name": "symlink-then-dotdot",
+    "note": "A .. after a symbolic link goes up from the link's target, not from the link.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock",
+      "outside"
+    ],
+    "lockRoot": "repo",
+    "symlinks": [
+      {
+        "path": "outside/lnk",
+        "target": "../repo/.mcp"
+      }
+    ],
+    "sequencePath": "outside/lnk/../sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "dotdot-below-existing",
+    "note": "A .. in the part of the path that does not exist yet.",
+    "dirs": [
+      "repo/.git",
+      "repo/.mcp/lock",
+      "state"
+    ],
+    "lockRoot": "repo",
+    "sequencePath": "state/new/../sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "submodule-superproject",
+    "note": "A submodule's .git file points under modules/; the superproject holds the lock.",
+    "dirs": [
+      "super/.git/modules/sm",
+      "super/sm/.mcp/lock",
+      "super/other"
+    ],
+    "texts": [
+      {
+        "path": "super/sm/.git",
+        "text": "gitdir: ../.git/modules/sm\n"
+      }
+    ],
+    "lockRoot": "super/sm",
+    "sequencePath": "super/other/sequence",
+    "expect": "refuse"
+  },
+  {
+    "name": "worktree-top",
+    "note": "A linked worktree's .git file points under worktrees/; the worktree is the repository.",
+    "dirs": [
+      "main/.git/worktrees/wt",
+      "outer/.git",
+      "outer/wt/.mcp/lock",
+      "outer/state"
+    ],
+    "texts": [
+      {
+        "path": "outer/wt/.git",
+        "text": "gitdir: ../../main/.git/worktrees/wt\n"
+      }
+    ],
+    "lockRoot": "outer/wt",
+    "sequencePath": "outer/state/sequence",
+    "expect": "accept"
+  },
+  {
+    "name": "git-file-unreadable-continues",
+    "note": "A .git file that names no worktree: the walk goes on to the enclosing repository.",
+    "dirs": [
+      "outer/.git",
+      "outer/repo/sub/.mcp/lock",
+      "outer/state"
+    ],
+    "files": [
+      "outer/repo/.git"
+    ],
+    "lockRoot": "outer/repo/sub",
+    "sequencePath": "outer/state/sequence",
+    "expect": "refuse"
   }
 ]

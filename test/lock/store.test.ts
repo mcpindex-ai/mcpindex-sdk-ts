@@ -4,13 +4,13 @@
  */
 
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { FileLockStore } from "../../src/lock/store.js";
+import { FileLockStore, HostConfigError, hostPathProblem, repositoryRoot } from "../../src/lock/store.js";
 import { runLockStoreConformance } from "./conformance.js";
 import { LockError, loadLock, shardFilename } from "../../src/lock/lock.js";
 import type { Identity } from "../../src/lock/lock.js";
@@ -206,5 +206,45 @@ test("the writer adds a manifest when the host requires or signs one, as the Pyt
     assert.equal(existsSync(join(plain.root, ".mcp", "lock", "MANIFEST.json")), false);
   } finally {
     plain.done();
+  }
+});
+
+test("host paths are judged by directory identity, not by spelling (audit r4)", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "mcplock-hostpath-")));
+  try {
+    for (const d of ["Repo/.git", "Repo/locks", "outside", "super/.git/modules/sm", "super/sm", "super/other", "plain/sub/lock"]) {
+      mkdirSync(join(base, d), { recursive: true });
+    }
+    writeFileSync(join(base, "super/sm/.git"), "gitdir: ../.git/modules/sm\n");
+    symlinkSync("../Repo/locks", join(base, "outside/lnk"));
+    const refused = (root: string, sequencePath: string): boolean => hostPathProblem(join(base, root), { sequencePath }) !== null;
+
+    // A symlink then `..`: the system goes up from Repo/locks into Repo; join() would say outside/.
+    assert.equal(refused("Repo/locks", `${base}/outside/lnk/../seq.json`), true);
+    assert.equal(refused("Repo/locks", `${base}/outside/lnk/seq.json`), true);
+    // A `..` in the part that does not exist is refused outright.
+    assert.equal(refused("Repo/locks", `${base}/outside/new/../seq.json`), true);
+    // A submodule's .git file sends the walk on to the superproject.
+    assert.equal(repositoryRoot(join(base, "super/sm")), join(base, "super"));
+    assert.equal(refused("super/sm", `${base}/super/other/seq.json`), true);
+    // No .git anywhere: only the lock root is protected; a sibling is accepted (documented limit).
+    assert.equal(refused("plain/sub/lock", `${base}/plain/sub/seq.json`), false);
+    assert.equal(refused("plain/sub/lock", `${base}/plain/sub/lock/seq.json`), true);
+    assert.equal(refused("Repo/locks", `${base}/outside/seq.json`), false);
+
+    // Case variants name the same directory only on a case-insensitive file system (APFS default).
+    if (existsSync(join(base, "REPO"))) {
+      assert.equal(refused("Repo/locks", `${base}/REPO/seq.json`), true);
+      assert.equal(refused("Repo/locks", `${base}/repo/locks`), true);
+      assert.equal(refused("repo/locks", `${base}/Repo/seq.json`), true);
+    }
+
+    // The store opens the resolved path, the one the rule checked.
+    assert.throws(
+      () => new FileLockStore({ root: join(base, "Repo/locks"), sequencePath: `${base}/outside/lnk/../seq.json` }),
+      HostConfigError,
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });

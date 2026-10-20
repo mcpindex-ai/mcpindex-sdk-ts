@@ -235,7 +235,7 @@ test("sigstore verifier: exact issuer and SAN match on the returned signer, anch
   assert.equal(await issuer.verify(Buffer.from("m"), Buffer.from("{}"), SIGNER), false);
 });
 
-test("real Sigstore bundle verification", { skip: "no valid Sigstore bundle in vectors-draft-1d; needs a signed MANIFEST.json and an operator trusted_root.json" }, () => {
+test("real Sigstore bundle verification", { skip: "no valid Sigstore bundle in vectors-draft-1e; needs a signed MANIFEST.json and an operator trusted_root.json" }, () => {
   // Intentionally empty.
 });
 

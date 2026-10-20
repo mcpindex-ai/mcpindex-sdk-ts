@@ -177,7 +177,7 @@ opt-in richer tier (it behaves identically today). The full notice is exported a
 ## Lock mode (`@mcp-index/sdk/lock`)
 
 Lock mode checks every `tools/list` against an mcp.lock kept in your repository
-(`.mcp/lock/` and `.mcp/contracts/`, format: mcp.lock draft 1, revision 1d). The model sees
+(`.mcp/lock/` and `.mcp/contracts/`, format: mcp.lock draft 1, revision 1e). The model sees
 only tools whose definition digest matches an approval, and a call to anything else is
 refused with JSON-RPC error -32011 before it reaches the server. Lock mode is opt-in and
 draft 1 is not stable. Nothing here runs unless you construct it, and the root
@@ -243,9 +243,14 @@ const signed = new FileLockStore({
 });
 ```
 
-Both paths must lie outside the repository that holds the lock (the nearest directory with
-a `.git` entry at or above `root`, else `root`), or the constructor throws
-`HostConfigError`. A signer without a sequence store makes every load
+Both paths must lie outside the repository that holds the lock, or the constructor throws
+`HostConfigError`. The repository is the nearest directory at or above `root` with a `.git`
+directory or a linked worktree's `.git` file; a submodule's `.git` file sends the search on to
+the superproject. The check compares directories by device and inode, so a case-folded
+spelling on macOS and a symlink followed by `..` are judged where they land, and a `..` in the
+part of a path that does not exist yet is refused. When no `.git` entry exists at or above
+`root`, only `root` itself is protected: a path beside it in the same untracked directory is
+accepted, so keep host files somewhere the lock's writers cannot reach. A signer without a sequence store makes every load
 `lock-signature-invalid`.
 
 ## Postgres lock store (`@mcp-index/sdk/lock/pg`)

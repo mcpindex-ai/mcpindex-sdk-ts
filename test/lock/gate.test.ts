@@ -1,6 +1,6 @@
 /**
  * CallGate order and default staleness, the _meta decision, and listing event
- * fields that must match the Python host (draft 1, revision 1d).
+ * fields that must match the Python host (draft 1, revision 1e).
  */
 
 import assert from "node:assert/strict";

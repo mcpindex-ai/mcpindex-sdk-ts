@@ -1,7 +1,7 @@
 /**
- * mcp.lock draft 1 revision 1d vectors, vendored from mcp-tool-pinning tag
- * vectors-draft-1d (b5e84c8) into test/fixtures/mcp-lock-vectors with
- * `git archive vectors-draft-1d vectors`. SHA256SUMS is pinned below; every
+ * mcp.lock draft 1 revision 1e vectors, vendored from mcp-tool-pinning tag
+ * vectors-draft-1e (79151a5) into test/fixtures/mcp-lock-vectors with
+ * `git archive vectors-draft-1e vectors`. SHA256SUMS is pinned below; every
  * vendored file must match it, so the vectors cannot drift silently.
  *
  * Lock cases load through FileLockStore with the case's host config, and their
@@ -54,14 +54,14 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const VECTORS = join(ROOT, "test", "fixtures", "mcp-lock-vectors");
-const SUMS_SHA256 = "f1ad0c1a09074f0b2e33375e61ebac23b6f3d4f3ebf06f33f80a6702cd6ec371";
+const SUMS_SHA256 = "72bc7f1beb2d52e24f3b2782a11a808af71d4c8f0271dda3c6885fd1bb4796f5";
 
 const sha256 = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
 const readJson = (rel: string): unknown => JSON.parse(readFileSync(join(VECTORS, rel), "utf8"));
 
 const counts = { tools: 0, raw: 0, identity: 0, lock: 0, sessions: 0, frames: 0, host: 0, contracts: 0 };
 
-test("SHA256SUMS is the pinned vectors-draft-1d file and covers every vendored file", () => {
+test("SHA256SUMS is the pinned vectors-draft-1e file and covers every vendored file", () => {
   const sums = readFileSync(join(VECTORS, "SHA256SUMS"));
   assert.equal(sha256(sums), SUMS_SHA256);
   const listed = new Map<string, string>();
@@ -394,6 +394,7 @@ test("host-config.json: sequencePath and trustedRoot outside the lock's reposito
     name: string;
     dirs?: string[];
     files?: string[];
+    texts?: Array<{ path: string; text: string }>;
     symlinks?: Array<{ path: string; target: string }>;
     lockRoot: string;
     sequencePath?: string;
@@ -408,13 +409,18 @@ test("host-config.json: sequencePath and trustedRoot outside the lock's reposito
         mkdirSync(dirname(join(base, f)), { recursive: true });
         writeFileSync(join(base, f), "");
       }
+      for (const t of c.texts ?? []) {
+        mkdirSync(dirname(join(base, t.path)), { recursive: true });
+        writeFileSync(join(base, t.path), t.text);
+      }
       for (const l of c.symlinks ?? []) {
         mkdirSync(dirname(join(base, l.path)), { recursive: true });
         symlinkSync(l.target, join(base, l.path));
       }
       const root = join(base, c.lockRoot);
-      const sequencePath = c.sequencePath === undefined ? undefined : join(base, c.sequencePath);
-      const trustedRootPath = c.trustedRoot === undefined ? undefined : join(base, c.trustedRoot);
+      // Joined as strings, not with join(): some cases hold a `..` the system must resolve.
+      const sequencePath = c.sequencePath === undefined ? undefined : `${base}/${c.sequencePath}`;
+      const trustedRootPath = c.trustedRoot === undefined ? undefined : `${base}/${c.trustedRoot}`;
       const problem = hostPathProblem(root, { sequencePath, trustedRootPath });
       assert.equal(problem === null ? "accept" : "refuse", c.expect, `${c.name}: ${String(problem)}`);
       // The file store applies the same rule when it is constructed.
@@ -431,7 +437,7 @@ test("host-config.json: sequencePath and trustedRoot outside the lock's reposito
     }
     counts.host++;
   }
-  assert.equal(counts.host, 9);
+  assert.equal(counts.host, 14);
 });
 
 test("contract files are RFC 8785 text of themselves", () => {
@@ -513,7 +519,7 @@ function toWriter(v: unknown): W {
 }
 
 test("vector totals", () => {
-  // tools 42 + raw 48 + identity 29 + lock 61 + frames 25 + host 9 = 214 vectors
+  // tools 42 + raw 48 + identity 29 + lock 61 + frames 25 + host 14 = 219 vectors
   // (6 of the lock cases also run a session), plus contracts.
-  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock + counts.frames + counts.host, 214);
+  assert.equal(counts.tools + counts.raw + counts.identity + counts.lock + counts.frames + counts.host, 219);
 });
