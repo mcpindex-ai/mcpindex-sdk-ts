@@ -58,7 +58,7 @@ export {
 } from "./gate.js";
 export type { BehavioralVerifier, BehavioralResult, GateOptions } from "./gate.js";
 
-export { ChangeKind, classifyChange, isSafetyRelevant, MAX_DEPTH } from "./schemaDiff.js";
+export { ChangeKind, classifyChange, classifyLabelChanges, isSafetyRelevant, LABEL_ONLY_KINDS, MAX_DEPTH } from "./schemaDiff.js";
 export type { Change } from "./schemaDiff.js";
 
 export { canonicalBytes, contractBytes, toolHash } from "./canonical.js";

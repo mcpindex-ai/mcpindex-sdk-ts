@@ -15,12 +15,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 import { Gate, GUARD_DANGEROUS_KINDS, Posture, renderHoldBanner } from "../src/gate.js";
 import { PreflightPin, Decision, ToolDef } from "../src/preflight.js";
-import { classifyChange, ChangeKind } from "../src/schemaDiff.js";
+import { classifyChange, classifyLabelChanges, ChangeKind, LABEL_ONLY_KINDS } from "../src/schemaDiff.js";
 import { STRING_KEYS, scanSchemaHasMarker, RESULT_MARKER_SOURCES } from "../src/scan.js";
 import { redactGreenWords, assertNoGreenWords } from "../src/provenance.js";
 
@@ -405,4 +406,47 @@ test("PARITY ASSERTION: the TS GUARD dangerous set EQUALS the live Python _GUARD
     pyKinds,
     `guard sets diverged\n  ts: ${tsKinds.join(",")}\n  py: ${pyKinds.join(",")}`,
   );
+});
+
+test("LABEL PARITY: both languages emit identical kinds for the label-pair corpus", () => {
+  // The TS fixture must be the Python one byte for byte, so the recorded labels and gate
+  // decisions both suites assert are the same table. Then every pair goes through live
+  // Python (classify_change + classify_label_changes) and through TS, and the full Change
+  // lists, safety bit included, must match. Fails closed when the Python tree is absent.
+  const repoRoot = resolve(REPO_ROOT, "..");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const tsRaw = readFileSync(resolve(here, "../../test/fixtures/schema-diff-label-pairs.json"), "utf8");
+  let pyRaw: string;
+  let pyOut: string;
+  try {
+    pyRaw = readFileSync(resolve(repoRoot, "tests/fixtures/schema_diff_label_pairs.json"), "utf8");
+    pyOut = execFileSync(
+      "uv",
+      [
+        "run", "--extra", "dev", "python", "-c",
+        "import sys, json; sys.path.insert(0,'corpus_eval'); " +
+          "from tooling.cse.schema_diff import classify_change, classify_label_changes, LABEL_ONLY_KINDS; " +
+          "pairs = json.load(sys.stdin); " +
+          "rows = [[[c.kind.value, c.path, c.detail, c.safety_relevant] for c in classify_change(p['before'], p['after']) + classify_label_changes(p['before'], p['after'])] for p in pairs]; " +
+          "print(json.dumps({'rows': rows, 'label_only': sorted(k.value for k in LABEL_ONLY_KINDS)}))",
+      ],
+      { cwd: repoRoot, encoding: "utf8", timeout: 120000, input: JSON.stringify(JSON.parse(tsRaw).pairs) },
+    );
+  } catch (e) {
+    throw new Error(`could not run live Python for the label parity assertion: ${String(e)}`);
+  }
+  assert.equal(tsRaw, pyRaw, "schema-diff-label-pairs.json differs from the Python fixture");
+  const py = JSON.parse(pyOut.trim().split("\n").pop()!) as { rows: unknown[][]; label_only: string[] };
+  assert.deepEqual([...LABEL_ONLY_KINDS].map(String).sort(), py.label_only, "LABEL_ONLY_KINDS diverged");
+  const pairs = JSON.parse(tsRaw).pairs as Array<{ case: string; before: ToolDef; after: ToolDef }>;
+  assert.equal(py.rows.length, pairs.length);
+  pairs.forEach((p, i) => {
+    const ts = [...classifyChange(p.before, p.after), ...classifyLabelChanges(p.before, p.after)].map((c) => [
+      c.kind,
+      c.path,
+      c.detail,
+      c.safetyRelevant,
+    ]);
+    assert.deepEqual(ts, py.rows[i], p.case);
+  });
 });
