@@ -7,7 +7,7 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ### Security
 
-- A hash-matched tool whose annotations nest a key deeper than the gate compares (64 levels) is now held under guard. The comparison already held it, but with a reason guard did not block on, so guard ran the call with a notice, and a readOnlyHint false -> true or destructiveHint true -> false move beside the deep key went through. Guard and strict now hold it like every other comparison that could not complete; monitor lets the call run and reports it. Same as mcpindex-gate 0.22.2.
+- A hash-matched tool whose annotations nest a key deeper than the gate compares (64 levels) is now held under guard. The comparison already held it, but with a reason guard did not block on, so guard ran the call with a notice, and a readOnlyHint false -> true or destructiveHint true -> false move beside the deep key went through. Strict already held it; guard now holds it too, like every other comparison that could not complete; monitor lets the call run and reports it. Same as mcpindex-gate 0.22.2.
 
 ### Changed
 
