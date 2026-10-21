@@ -43,8 +43,10 @@ export enum ChangeKind {
 }
 
 /** Kinds that tell a reviewer what moved and decide nothing. Mirrors `LABEL_ONLY_KINDS` in
- * corpus_eval/tooling/cse/schema_diff.py. `classifyChange` never emits them, so no gate path
- * sees them, and they are in none of gate.ts's guard, benign or behavioural-mandate sets. */
+ * corpus_eval/tooling/cse/schema_diff.py. `classifyChange` never emits them and they never
+ * enter a gate verdict. The gate calls `classifyLabelChanges` once, just before a benign
+ * auto-accept, and holds when any label moved; the kinds are in none of gate.ts's guard,
+ * benign or behavioural-mandate sets. */
 export const LABEL_ONLY_KINDS: ReadonlySet<ChangeKind> = new Set([
   ChangeKind.ANNOTATION_HINT_CHANGED,
   ChangeKind.TITLE_CHANGED,
@@ -727,7 +729,7 @@ function flipCovers(hint: string, oldV: unknown, newV: unknown): boolean {
  *
  * Kept out of `classifyChange` because the gate reacts to the presence of a kind: the benign
  * allowlist holds on any kind outside it, and an empty list on a moved hash takes the
- * fail-closed undiffable path. Emits TITLE_CHANGED at `title` and `annotations.title`, then
+ * fail-closed undiffable path. The gate calls it only to refuse a benign auto-accept. Emits TITLE_CHANGED at `title` and `annotations.title`, then
  * ANNOTATION_HINT_CHANGED at `annotations.<hint>` for each of the four MCP hints whose value
  * moved, unless `annotationFlip` already classifies the move. Title text never enters
  * `detail`. */

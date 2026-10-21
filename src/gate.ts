@@ -20,6 +20,7 @@ import {
   ChangeKind,
   UndiffableError,
   classifyChange,
+  classifyLabelChanges,
   isNumericOnlyDescriptionChange,
   isSafetyRelevant,
   jsonEqual,
@@ -111,6 +112,9 @@ const DANGEROUS_REASON_MARKERS: readonly string[] = [
   "could not complete",
   "DESCRIPTION changed",
   "schema text changed",
+  // A title or annotation hint that moved beside an otherwise benign change. A title is
+  // text the model reads; a hint decides what a host lets run unattended.
+  "title or annotation hint changed",
   // title, icons, _meta, execution or a later top-level field on a hash-matched tool.
   "a tool field outside the definition hash changed",
   "outputSchema text was added",
@@ -1337,6 +1341,31 @@ export class Gate {
         name,
         drift,
         "contract DRIFTED: schema text changed (an added parameter carries text, or the input schema is not the pinned schema once added parameters are removed)",
+        HoldClass.DRIFT,
+      );
+    }
+
+    // A title or annotation hint that rides along with an otherwise benign change. The hash
+    // does not cover them, so a re-pin here would take them in unreviewed. The label kinds
+    // stay out of `drift` so no kind set, hold class or telemetry row moves. Mirrors gate.py.
+    let labels: string[];
+    try {
+      labels = [...new Set(classifyLabelChanges(pinned.schema ?? {}, observed).map((c) => c.path))].sort();
+    } catch {
+      return this.driftHold(
+        name,
+        drift,
+        "contract DRIFTED and the title and annotation hint comparison could not complete; fail-closed HOLD",
+        HoldClass.DRIFT,
+      );
+    }
+    if (labels.length > 0) {
+      return this.driftHold(
+        name,
+        drift,
+        "contract DRIFTED: a title or annotation hint changed (" +
+          labels.join(", ") +
+          ") alongside an otherwise benign change; review the before/after and re-pin if expected",
         HoldClass.DRIFT,
       );
     }

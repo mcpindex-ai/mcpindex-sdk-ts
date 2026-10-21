@@ -14,7 +14,11 @@ Version 0.19.0 in package.json. Not published yet.
 - `@mcp-index/sdk/lock/pg`: `PgLockStore`, a Postgres store with append-only hash-chained records, row-level security, `app-scoped` and `role-bound` tenancy, two roles, and an optional signed head that needs a sequence store.
 - `@mcp-index/sdk/ai`: `lockTransport` for `createMCPClient` from the Vercel AI SDK.
 - Optional peer dependencies: `@ai-sdk/mcp` for `/ai`, `pg` for `/lock/pg`, `sigstore` for signed locks. The package still has no runtime dependencies.
-- `classifyLabelChanges` and `LABEL_ONLY_KINDS`, with two new `ChangeKind` members, `title-changed` (tool `title` or `annotations.title` added, removed or changed) and `annotation-hint-changed` (any move of readOnlyHint, destructiveHint, idempotentHint or openWorldHint that `annotation-flip-to-destructive` does not already cover). Labels for a reviewer only: `classifyChange` is unchanged, the gate never sees them, and no decision moves. Same output as the Python `classify_label_changes`.
+- `classifyLabelChanges` and `LABEL_ONLY_KINDS`, with two new `ChangeKind` members, `title-changed` (tool `title` or `annotations.title` added, removed or changed) and `annotation-hint-changed` (any move of readOnlyHint, destructiveHint, idempotentHint or openWorldHint that `annotation-flip-to-destructive` does not already cover). Labels for a reviewer only: `classifyChange` is unchanged and the kinds never enter a gate verdict. Same output as the Python `classify_label_changes`.
+
+### Changed
+
+- A title or annotation hint change that comes with a new optional parameter is now held for review instead of accepted. Before, the gate auto-accepted the parameter and re-pinned the tool, taking the new `title`, `annotations.title`, readOnlyHint, destructiveHint, idempotentHint or openWorldHint with it unreviewed. Guard and strict now hold it the way they hold a description change; monitor still lets the call run and reports it, and no longer re-pins. Lock mode is unchanged. Same as mcpindex-gate.
 
 ## 0.18.1 - 2026-10-13
 

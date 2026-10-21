@@ -450,3 +450,55 @@ test("LABEL PARITY: both languages emit identical kinds for the label-pair corpu
     assert.deepEqual(ts, py.rows[i], p.case);
   });
 });
+
+test("LABEL GATE PARITY: both languages reach the same static and effective decision on every label pair", () => {
+  // The fixture records the decisions, but each suite checks only its own gate against it.
+  // This runs every pair under monitor, guard and strict through live Python Gate.assess
+  // and through the TS gate and compares the pairs of decisions directly.
+  const repoRoot = resolve(REPO_ROOT, "..");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const tsRaw = readFileSync(resolve(here, "../../test/fixtures/schema-diff-label-pairs.json"), "utf8");
+  const pairs = JSON.parse(tsRaw).pairs as Array<{ case: string; before: ToolDef; after: ToolDef }>;
+  const postures = [Posture.MONITOR, Posture.GUARD, Posture.STRICT];
+  let pyOut: string;
+  try {
+    pyOut = execFileSync(
+      "uv",
+      [
+        "run", "--extra", "dev", "python", "-c",
+        "import sys, json, copy; sys.path.insert(0,'corpus_eval'); " +
+          "from tooling.cse.gate import Gate, Posture; from tooling.cse.preflight import PreflightPin; " +
+          "pairs = json.load(sys.stdin); out = []\n" +
+          "for p in pairs:\n" +
+          "  row = []\n" +
+          "  for name in ('monitor', 'guard', 'strict'):\n" +
+          "    g = Gate(pin=PreflightPin(), server_id='srv', posture=Posture(name))\n" +
+          "    g.observe(p['before']['name'], copy.deepcopy(p['before']))\n" +
+          "    s, e, _ = g.assess(p['after']['name'], copy.deepcopy(p['after']))\n" +
+          "    row.append([s.decision.value, e.decision.value])\n" +
+          "  out.append(row)\n" +
+          "print(json.dumps(out))",
+      ],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 120000,
+        input: JSON.stringify(pairs),
+        env: { ...process.env, MCPINDEX_WEEKLY_SUMMARY: "0" },
+      },
+    );
+  } catch (e) {
+    throw new Error(`could not run live Python for the label gate parity assertion: ${String(e)}`);
+  }
+  const py = JSON.parse(pyOut.trim().split("\n").pop()!) as string[][][];
+  assert.equal(py.length, pairs.length);
+  pairs.forEach((p, i) => {
+    const ts = postures.map((posture) => {
+      const gate = new Gate({ pin: new PreflightPin(), serverId: "srv", posture });
+      gate.observe(String(p.before.name), JSON.parse(JSON.stringify(p.before)) as ToolDef);
+      const [stat, eff] = gate.assess(String(p.after.name), JSON.parse(JSON.stringify(p.after)) as ToolDef);
+      return [String(stat.decision), String(eff.decision)];
+    });
+    assert.deepEqual(ts, py[i], p.case);
+  });
+});

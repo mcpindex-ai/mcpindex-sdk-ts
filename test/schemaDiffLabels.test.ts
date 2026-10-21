@@ -1,8 +1,9 @@
 // Label-only change kinds (title-changed, annotation-hint-changed). The pairs are a
 // byte-identical copy of mcpindex-trust tests/fixtures/schema_diff_label_pairs.json; each
 // carries what classifyChange and classifyLabelChanges must return and the gate decisions
-// recorded before these kinds existed. crossLangParity.test.ts runs the same pairs through
-// live Python.
+// recorded before these kinds existed, except the two cases where a title or hint moves
+// beside an added optional parameter, re-recorded when that stopped being auto-accepted.
+// crossLangParity.test.ts runs the same pairs through live Python.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -100,5 +101,34 @@ test("each pair: gate decisions match the recording under monitor, guard and str
         assert.ok(!v.drift.some((c) => LABEL_ONLY_KINDS.has(c.kind)), `${p.case} ${posture}: label kind in verdict`);
       }
     }
+  }
+});
+
+test("a title or hint beside an added optional parameter holds and keeps the pin", () => {
+  for (const name of ["hint-plus-optional-param", "title-plus-optional-param"]) {
+    const p = pairs.find((x) => x.case === name)!;
+    assert.deepEqual(p.kinds, ["added-optional-param"], name);
+    assert.ok(p.labels.length > 0, name);
+    for (const posture of [Posture.MONITOR, Posture.GUARD, Posture.STRICT]) {
+      const pin = new PreflightPin();
+      const gate = new Gate({ pin, serverId: "srv", posture });
+      gate.observe(String(p.before.name), clone(p.before));
+      const before = pin.get("srv", String(p.before.name))!.definitionHash;
+      const [stat, eff] = gate.decide(String(p.after.name), clone(p.after));
+      assert.equal(stat.decision, "HOLD", `${name} ${posture}`);
+      assert.ok(stat.reason.includes("title or annotation hint changed"), stat.reason);
+      for (const lab of p.labels) assert.ok(stat.reason.includes(lab.path), `${name}: ${lab.path}`);
+      assert.equal(eff.decision, posture === Posture.MONITOR ? "PROCEED" : "HOLD", `${name} ${posture}`);
+      assert.equal(pin.get("srv", String(p.before.name))!.definitionHash, before, `${name} ${posture}: pin moved`);
+    }
+    // The same parameter with no label change still auto-accepts.
+    const plain = clone(p.after) as Record<string, unknown>;
+    delete plain["title"];
+    delete plain["annotations"];
+    const gate = new Gate({ pin: new PreflightPin(), serverId: "srv", posture: Posture.GUARD });
+    gate.observe(String(p.before.name), clone(p.before));
+    const [stat] = gate.decide(String(plain["name"]), plain as ToolDef);
+    assert.equal(stat.decision, "PROCEED", name);
+    assert.ok(stat.reason.includes("PROVEN BENIGN"), stat.reason);
   }
 });
