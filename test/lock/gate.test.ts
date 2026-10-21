@@ -140,13 +140,30 @@ test("T5: counts.withheld counts unnamed entries and a whole-lock failure report
   assert.equal(failed.stripInstructions, true);
 });
 
-test("lock mode never auto-accepts a title or hint beside an added optional parameter", () => {
-  // Default mode holds these two label-pair cases now; lock mode already withheld (guard) or
+test("lock mode never accepts the title and hint changes default mode now holds", () => {
+  // Default mode holds these label-pair cases now; lock mode already withheld (guard) or
   // flagged (monitor) them.
   const here = dirname(fileURLToPath(import.meta.url));
   const pairs = JSON.parse(readFileSync(join(here, "../../../test/fixtures/schema-diff-label-pairs.json"), "utf8"))
     .pairs as Array<{ case: string; before: Record<string, unknown>; after: Record<string, unknown> }>;
-  for (const name of ["hint-plus-optional-param", "title-plus-optional-param"]) {
+  const held = [
+    "hint-plus-optional-param",
+    "title-plus-optional-param",
+    "readonly-absent-to-true",
+    "readonly-false-to-true",
+    "readonly-false-to-absent",
+    "destructive-true-to-false",
+    "destructive-absent-to-false",
+    "destructive-true-to-absent",
+    "idempotent-absent-to-true",
+    "idempotent-true-to-false",
+    "openworld-false-to-true",
+    "openworld-true-to-absent",
+    "hint-non-boolean-to-true",
+    "hint-number-to-boolean",
+    "hint-plus-output-schema-added",
+  ];
+  for (const name of held) {
     const p = pairs.find((x) => x.case === name)!;
     const lock = lockOf([["search", p.before]]);
     const guard = checkListing(lock, ID, { tools: [p.after] }, "guard");

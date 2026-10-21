@@ -1,5 +1,5 @@
 {
- "about": "Before/after tool pairs for the label-only change kinds. kinds is classify_change, labels is classify_label_changes, gate is the static and effective decision per posture, lock is the check_listing withhold (guard) or flag (monitor) reason. gate and lock were recorded before the label-only kinds existed, except gate for hint-plus-optional-param and title-plus-optional-param, re-recorded on 2026-10-21 when a title or hint change beside an added optional parameter stopped being auto-accepted. The TS SDK keeps a byte-identical copy at test/fixtures/schema-diff-label-pairs.json.",
+ "about": "Before/after tool pairs for the label-only change kinds. kinds is classify_change, labels is classify_label_changes, gate is the static and effective decision per posture, lock is the check_listing withhold (guard) or flag (monitor) reason. gate and lock were recorded before the label-only kinds existed, except gate for the cases where a title or hint change used to proceed, re-recorded on 2026-10-21 when the gate started holding any title or hint change: beside an added optional parameter or an added outputSchema, and on a hash-matched tool. The TS SDK keeps a byte-identical copy at test/fixtures/schema-diff-label-pairs.json.",
  "pairs": [
   {
    "after": {
@@ -38,16 +38,16 @@
    "case": "readonly-absent-to-true",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -103,16 +103,16 @@
    "case": "readonly-false-to-true",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -227,16 +227,16 @@
    "case": "readonly-false-to-absent",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -292,16 +292,16 @@
    "case": "destructive-true-to-false",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -354,16 +354,16 @@
    "case": "destructive-absent-to-false",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -417,16 +417,16 @@
    "case": "destructive-true-to-absent",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -537,16 +537,16 @@
    "case": "idempotent-absent-to-true",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -602,16 +602,16 @@
    "case": "idempotent-true-to-false",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -667,16 +667,16 @@
    "case": "openworld-false-to-true",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -729,16 +729,16 @@
    "case": "openworld-true-to-absent",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -794,16 +794,16 @@
    "case": "hint-non-boolean-to-true",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -859,16 +859,16 @@
    "case": "hint-number-to-boolean",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [],
@@ -2032,16 +2032,16 @@
    "case": "hint-plus-output-schema-added",
    "gate": {
     "guard": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "PROCEED"
+     "static": "HOLD"
     },
     "strict": {
-     "effective": "PROCEED",
-     "static": "PROCEED"
+     "effective": "HOLD",
+     "static": "HOLD"
     }
    },
    "kinds": [

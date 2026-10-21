@@ -1225,7 +1225,10 @@ export class Gate {
         HoldClass.DRIFT,
       );
     }
-    return null;
+    // A hint or title that moved on a hash-matched tool, on its own or beside an additive
+    // outputSchema. comparedFields leaves the four hints out, so this is the only place a
+    // hint-only change is seen.
+    return this.labelHold(pinned.toolName, drift, pinned.schema, observed);
   }
 
   private validateDrift(
@@ -1345,30 +1348,9 @@ export class Gate {
       );
     }
 
-    // A title or annotation hint that rides along with an otherwise benign change. The hash
-    // does not cover them, so a re-pin here would take them in unreviewed. The label kinds
-    // stay out of `drift` so no kind set, hold class or telemetry row moves. Mirrors gate.py.
-    let labels: string[];
-    try {
-      labels = [...new Set(classifyLabelChanges(pinned.schema ?? {}, observed).map((c) => c.path))].sort();
-    } catch {
-      return this.driftHold(
-        name,
-        drift,
-        "contract DRIFTED and the title and annotation hint comparison could not complete; fail-closed HOLD",
-        HoldClass.DRIFT,
-      );
-    }
-    if (labels.length > 0) {
-      return this.driftHold(
-        name,
-        drift,
-        "contract DRIFTED: a title or annotation hint changed (" +
-          labels.join(", ") +
-          ") alongside an otherwise benign change; review the before/after and re-pin if expected",
-        HoldClass.DRIFT,
-      );
-    }
+    // A title or annotation hint that rides along with an otherwise benign change.
+    const labelHold = this.labelHold(name, drift, pinned.schema, observed);
+    if (labelHold !== null) return labelHold;
 
     if (effects !== null) {
       effects.push({ kind: "repin", toolName: name, observed });
@@ -1434,6 +1416,35 @@ export class Gate {
   }
 
   // -------------------------------------------------------------- verdicts
+  /** A HOLD when `classifyLabelChanges` reports a title or annotation hint change against
+   * the pin, else null. Called on every path that would otherwise proceed with a moved title
+   * or hint or re-pin over one: the benign auto-accept, a hash match, and a behavioural
+   * clear. A title is text the model reads; a hint decides what a host lets run unattended,
+   * in either direction. The hash covers neither, and the label kinds stay out of `drift` so
+   * no kind set, hold class or telemetry row moves. Mirrors gate.py `_label_hold`. */
+  private labelHold(name: string, drift: Change[], pinnedSchema: ToolDef | null, observed: ToolDef): PreflightVerdict | null {
+    let labels: string[];
+    try {
+      labels = [...new Set(classifyLabelChanges(pinnedSchema ?? {}, observed).map((c) => c.path))].sort();
+    } catch {
+      return this.driftHold(
+        name,
+        drift,
+        "contract DRIFTED and the title and annotation hint comparison could not complete; fail-closed HOLD",
+        HoldClass.DRIFT,
+      );
+    }
+    if (labels.length === 0) return null;
+    return this.driftHold(
+      name,
+      drift,
+      "contract DRIFTED: a title or annotation hint changed (" +
+        labels.join(", ") +
+        "); review the before/after and re-pin if expected",
+      HoldClass.DRIFT,
+    );
+  }
+
   private descriptionHold(name: string, drift: Change[], oldDesc: string, newDesc: string): PreflightVerdict {
     return makeVerdict({
       serverId: this._serverId,
@@ -1657,6 +1668,9 @@ export class Gate {
           BehavioralOutcome.CLEARED,
         ];
       }
+      // The sandbox is as blind to a title or hint as to a description.
+      const labelHold = this.labelHold(toolName, [...staticVerdict.drift], pinned.schema, observed);
+      if (labelHold !== null) return [labelHold, BehavioralOutcome.CLEARED];
       this.repinOne(toolName, observed);
       return [
         makeVerdict({

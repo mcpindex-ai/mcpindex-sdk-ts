@@ -19,6 +19,7 @@ Version 0.19.0 in package.json. Not published yet.
 ### Changed
 
 - A title or annotation hint change that comes with a new optional parameter is now held for review instead of accepted. Before, the gate auto-accepted the parameter and re-pinned the tool, taking the new `title`, `annotations.title`, readOnlyHint, destructiveHint, idempotentHint or openWorldHint with it unreviewed. Guard and strict now hold it the way they hold a description change; monitor still lets the call run and reports it, and no longer re-pins. Lock mode is unchanged. Same as mcpindex-gate.
+- A title or annotation hint change is now held for review wherever it used to go through. A readOnlyHint, destructiveHint, idempotentHint or openWorldHint change on a tool whose definition hash still matches is held in either direction: a tool newly claiming to be read-only or non-destructive is the case a host would run unattended. So is a hint change that comes with a first outputSchema, and a behavioural validation that clears no longer re-pins over a title or hint change. Guard and strict hold these the way they hold a description change; monitor lets the call run and reports it. A title change on a hash-matched tool was already held. Lock mode is unchanged.
 
 ## 0.18.1 - 2026-10-13
 

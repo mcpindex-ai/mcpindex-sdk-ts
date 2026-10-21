@@ -1,8 +1,8 @@
 // Label-only change kinds (title-changed, annotation-hint-changed). The pairs are a
 // byte-identical copy of mcpindex-trust tests/fixtures/schema_diff_label_pairs.json; each
 // carries what classifyChange and classifyLabelChanges must return and the gate decisions
-// recorded before these kinds existed, except the two cases where a title or hint moves
-// beside an added optional parameter, re-recorded when that stopped being auto-accepted.
+// recorded before these kinds existed, except the cases where a title or hint change used to
+// proceed, re-recorded when the gate started holding them.
 // crossLangParity.test.ts runs the same pairs through live Python.
 
 import { test } from "node:test";
@@ -11,7 +11,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Gate, GUARD_DANGEROUS_KINDS, Posture, DEFAULT_BEHAVIORAL_MANDATED_KINDS } from "../src/gate.js";
+import {
+  BehavioralMethod,
+  BehavioralOutcome,
+  Gate,
+  GUARD_DANGEROUS_KINDS,
+  Ownership,
+  Posture,
+  DEFAULT_BEHAVIORAL_MANDATED_KINDS,
+} from "../src/gate.js";
 import { PreflightPin, type ToolDef } from "../src/preflight.js";
 import {
   ChangeKind,
@@ -104,23 +112,102 @@ test("each pair: gate decisions match the recording under monitor, guard and str
   }
 });
 
+// Re-recorded 2026-10-21: a hint change on a hash-matched tool, either direction, and a hint
+// beside a first outputSchema used to proceed. Same lists as smoke_schema_diff_labels.py.
+const HINT_ON_HASH_MATCH = [
+  "readonly-absent-to-true",
+  "readonly-false-to-true",
+  "readonly-false-to-absent",
+  "destructive-true-to-false",
+  "destructive-absent-to-false",
+  "destructive-true-to-absent",
+  "idempotent-absent-to-true",
+  "idempotent-true-to-false",
+  "openworld-false-to-true",
+  "openworld-true-to-absent",
+  "hint-non-boolean-to-true",
+  "hint-number-to-boolean",
+  "hint-plus-output-schema-added",
+];
+
+function assertLabelHold(p: Pair): void {
+  for (const posture of [Posture.MONITOR, Posture.GUARD, Posture.STRICT]) {
+    const pin = new PreflightPin();
+    const gate = new Gate({ pin, serverId: "srv", posture });
+    gate.observe(String(p.before.name), clone(p.before));
+    const before = JSON.stringify(pin.get("srv", String(p.before.name))!.schema);
+    const [stat, eff] = gate.decide(String(p.after.name), clone(p.after));
+    assert.equal(stat.decision, "HOLD", `${p.case} ${posture}`);
+    assert.ok(stat.reason.includes("title or annotation hint changed"), stat.reason);
+    for (const lab of p.labels) assert.ok(stat.reason.includes(lab.path), `${p.case}: ${lab.path}`);
+    assert.equal(eff.decision, posture === Posture.MONITOR ? "PROCEED" : "HOLD", `${p.case} ${posture}`);
+    assert.equal(JSON.stringify(pin.get("srv", String(p.before.name))!.schema), before, `${p.case} ${posture}: pin moved`);
+  }
+}
+
+test("a hint change on a hash-matched tool holds in both directions; outputSchema alone proceeds", () => {
+  for (const name of HINT_ON_HASH_MATCH) {
+    const p = pairs.find((x) => x.case === name)!;
+    assert.ok(p.kinds.length === 0 || (p.kinds.length === 1 && p.kinds[0] === "output-schema-added"), name);
+    assert.ok(p.labels.length > 0 && p.labels.every((l) => l.kind === "annotation-hint-changed"), name);
+    assertLabelHold(p);
+  }
+  const p = pairs.find((x) => x.case === "hint-plus-output-schema-added")!;
+  const plain = clone(p.after) as Record<string, unknown>;
+  if (p.before["annotations"] === undefined) delete plain["annotations"];
+  else plain["annotations"] = clone(p.before["annotations"]);
+  const gate = new Gate({ pin: new PreflightPin(), serverId: "srv", posture: Posture.GUARD });
+  gate.observe(String(p.before.name), clone(p.before));
+  assert.equal(gate.decide(String(plain["name"]), plain as ToolDef)[0].decision, "PROCEED");
+});
+
+test("a title change on a hash-matched tool was already held outside the hash", () => {
+  const cases = pairs.filter((p) => p.kinds.length === 0 && p.labels.some((l) => l.kind === "title-changed"));
+  assert.ok(cases.length >= 7, `only ${cases.length} cases`);
+  for (const p of cases) {
+    const gate = new Gate({ pin: new PreflightPin(), serverId: "srv", posture: Posture.GUARD });
+    gate.observe(String(p.before.name), clone(p.before));
+    const [stat, eff] = gate.decide(String(p.after.name), clone(p.after));
+    assert.equal(eff.decision, "HOLD", p.case);
+    assert.ok(stat.reason.includes("outside the definition hash changed"), stat.reason);
+  }
+});
+
+test("a behavioural clear holds when a hint moved beside the flip, and re-pins the flip alone", () => {
+  const clears = {
+    verify: () => ({ outcome: BehavioralOutcome.CLEARED, method: BehavioralMethod.SANDBOX_BATTERY, reason: "" }),
+  };
+  for (const [name, held] of [
+    ["flip-plus-idempotent-change", true],
+    ["readonly-true-to-false-existing-flip", false],
+  ] as const) {
+    const p = pairs.find((x) => x.case === name)!;
+    const pin = new PreflightPin();
+    const gate = new Gate({ pin, serverId: "srv", posture: Posture.GUARD, ownership: Ownership.OSS });
+    gate.observe(String(p.before.name), clone(p.before));
+    const [stat] = gate.decide(String(p.after.name), clone(p.after));
+    assert.equal(stat.decision, "INCONCLUSIVE", name);
+    const [verdict, outcome] = gate.runBehavioralOutcome(String(p.after.name), clone(p.after), stat, clears);
+    assert.equal(outcome, BehavioralOutcome.CLEARED, name);
+    const ann = (pin.get("srv", String(p.before.name))!.schema as Record<string, unknown>)["annotations"];
+    const moved = JSON.stringify(ann) === JSON.stringify(p.after["annotations"]);
+    if (held) {
+      assert.equal(verdict.decision, "HOLD", verdict.reason);
+      assert.ok(verdict.reason.includes("annotations.idempotentHint"), verdict.reason);
+      assert.ok(!moved, `${name}: pin moved`);
+    } else {
+      assert.equal(verdict.decision, "PROCEED", verdict.reason);
+      assert.ok(moved, `${name}: flip alone not re-pinned`);
+    }
+  }
+});
+
 test("a title or hint beside an added optional parameter holds and keeps the pin", () => {
   for (const name of ["hint-plus-optional-param", "title-plus-optional-param"]) {
     const p = pairs.find((x) => x.case === name)!;
     assert.deepEqual(p.kinds, ["added-optional-param"], name);
     assert.ok(p.labels.length > 0, name);
-    for (const posture of [Posture.MONITOR, Posture.GUARD, Posture.STRICT]) {
-      const pin = new PreflightPin();
-      const gate = new Gate({ pin, serverId: "srv", posture });
-      gate.observe(String(p.before.name), clone(p.before));
-      const before = pin.get("srv", String(p.before.name))!.definitionHash;
-      const [stat, eff] = gate.decide(String(p.after.name), clone(p.after));
-      assert.equal(stat.decision, "HOLD", `${name} ${posture}`);
-      assert.ok(stat.reason.includes("title or annotation hint changed"), stat.reason);
-      for (const lab of p.labels) assert.ok(stat.reason.includes(lab.path), `${name}: ${lab.path}`);
-      assert.equal(eff.decision, posture === Posture.MONITOR ? "PROCEED" : "HOLD", `${name} ${posture}`);
-      assert.equal(pin.get("srv", String(p.before.name))!.definitionHash, before, `${name} ${posture}: pin moved`);
-    }
+    assertLabelHold(p);
     // The same parameter with no label change still auto-accepts.
     const plain = clone(p.after) as Record<string, unknown>;
     delete plain["title"];
