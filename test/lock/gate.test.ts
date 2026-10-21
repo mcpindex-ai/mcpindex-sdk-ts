@@ -4,7 +4,10 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CallGate, DEFAULT_MAX_STALENESS_MS, checkListing } from "../../src/lock/check.js";
 import { metaDigest, toolDigest } from "../../src/lock/digest.js";
@@ -135,4 +138,38 @@ test("T5: counts.withheld counts unnamed entries and a whole-lock failure report
   assert.equal(e2.instructions, null);
   assert.equal(e2.lockError, "lock-unreadable");
   assert.equal(failed.stripInstructions, true);
+});
+
+test("lock mode never accepts the title and hint changes default mode now holds", () => {
+  // Default mode holds these label-pair cases now; lock mode already withheld (guard) or
+  // flagged (monitor) them.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pairs = JSON.parse(readFileSync(join(here, "../../../test/fixtures/schema-diff-label-pairs.json"), "utf8"))
+    .pairs as Array<{ case: string; before: Record<string, unknown>; after: Record<string, unknown> }>;
+  const held = [
+    "hint-plus-optional-param",
+    "title-plus-optional-param",
+    "readonly-absent-to-true",
+    "readonly-false-to-true",
+    "readonly-false-to-absent",
+    "destructive-true-to-false",
+    "destructive-absent-to-false",
+    "destructive-true-to-absent",
+    "idempotent-absent-to-true",
+    "idempotent-true-to-false",
+    "openworld-false-to-true",
+    "openworld-true-to-absent",
+    "hint-non-boolean-to-true",
+    "hint-number-to-boolean",
+    "hint-plus-output-schema-added",
+  ];
+  for (const name of held) {
+    const p = pairs.find((x) => x.case === name)!;
+    const lock = lockOf([["search", p.before]]);
+    const guard = checkListing(lock, ID, { tools: [p.after] }, "guard");
+    assert.equal(guard.withheld.get("search"), "upstream-changed", name);
+    assert.ok(!guard.callable.has("search"), name);
+    const monitor = checkListing(lock, ID, { tools: [p.after] }, "monitor");
+    assert.equal(monitor.flagged.get("search"), "upstream-changed", name);
+  }
 });

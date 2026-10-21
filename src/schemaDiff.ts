@@ -37,7 +37,20 @@ export enum ChangeKind {
   PROMPT_REMOVED = "prompt-removed",
   PROMPT_DESCRIPTION_CHANGED = "prompt-description-changed",
   PROMPT_ARGS_CHANGED = "prompt-args-changed",
+  // Label-only kinds: emitted by `classifyLabelChanges`, never by `classifyChange`.
+  ANNOTATION_HINT_CHANGED = "annotation-hint-changed",
+  TITLE_CHANGED = "title-changed",
 }
+
+/** Kinds that tell a reviewer what moved and decide nothing. Mirrors `LABEL_ONLY_KINDS` in
+ * corpus_eval/tooling/cse/schema_diff.py. `classifyChange` never emits them and they never
+ * enter a gate verdict. The gate calls `classifyLabelChanges` once, just before a benign
+ * auto-accept, and holds when any label moved; the kinds are in none of gate.ts's guard,
+ * benign or behavioural-mandate sets. */
+export const LABEL_ONLY_KINDS: ReadonlySet<ChangeKind> = new Set([
+  ChangeKind.ANNOTATION_HINT_CHANGED,
+  ChangeKind.TITLE_CHANGED,
+]);
 
 
 // --- description numeric-only ------------------------------------------------
@@ -680,9 +693,77 @@ function headerMirrorChanges(oldSchema: Dict, newSchema: Dict): Change[] {
   return changes;
 }
 
+const ANNOTATION_HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
+
+/** Label equality: undefined and null are the same; a value too deep to compare counts as
+ * changed. Mirrors `_label_same`. */
+function labelSame(a: unknown, b: unknown): boolean {
+  try {
+    return jsonEqual(a ?? null, b ?? null);
+  } catch {
+    return false;
+  }
+}
+
+function hintWord(v: unknown): string {
+  if (v === undefined || v === null) return "absent";
+  if (v === true) return "true";
+  if (v === false) return "false";
+  return "non-boolean";
+}
+
+function presenceDetail(what: string, oldV: unknown, newV: unknown): string {
+  if (oldV === undefined || oldV === null) return `${what} added`;
+  if (newV === undefined || newV === null) return `${what} removed`;
+  return `${what} changed`;
+}
+
+function flipCovers(hint: string, oldV: unknown, newV: unknown): boolean {
+  if (hint === "destructiveHint") return oldV !== true && newV === true;
+  if (hint === "readOnlyHint") return oldV === true && newV !== true;
+  return false;
+}
+
+/** Label-only deltas: title and annotation-hint changes that `classifyChange` does not name.
+ * Parity port of `classify_label_changes` in corpus_eval/tooling/cse/schema_diff.py.
+ *
+ * Kept out of `classifyChange` because the gate reacts to the presence of a kind: the benign
+ * allowlist holds on any kind outside it, and an empty list on a moved hash takes the
+ * fail-closed undiffable path. The gate calls it only to refuse a benign auto-accept. Emits TITLE_CHANGED at `title` and `annotations.title`, then
+ * ANNOTATION_HINT_CHANGED at `annotations.<hint>` for each of the four MCP hints whose value
+ * moved, unless `annotationFlip` already classifies the move. Title text never enters
+ * `detail`. */
+export function classifyLabelChanges(
+  oldTool: Record<string, unknown>,
+  newTool: Record<string, unknown>,
+): Change[] {
+  const changes: Change[] = [];
+  const oldAnn = dictish(oldTool["annotations"]);
+  const newAnn = dictish(newTool["annotations"]);
+  const titles: Array<[string, unknown, unknown]> = [
+    ["title", oldTool["title"], newTool["title"]],
+    ["annotations.title", oldAnn["title"], newAnn["title"]],
+  ];
+  for (const [path, oldV, newV] of titles) {
+    if (!labelSame(oldV, newV)) {
+      changes.push(mk(ChangeKind.TITLE_CHANGED, path, presenceDetail(path, oldV, newV)));
+    }
+  }
+  for (const hint of ANNOTATION_HINTS) {
+    const oldV = oldAnn[hint];
+    const newV = newAnn[hint];
+    if (labelSame(oldV, newV) || flipCovers(hint, oldV, newV)) continue;
+    changes.push(
+      mk(ChangeKind.ANNOTATION_HINT_CHANGED, `annotations.${hint}`, `${hint} ${hintWord(oldV)} -> ${hintWord(newV)}`),
+    );
+  }
+  return changes;
+}
+
 /** Classify every delta between two PUBLIC tool definitions into the taxonomy.
  * Total: a structural surprise degrades to no-signal. Mirrors
- * `schema_diff.classify_change`. */
+ * `schema_diff.classify_change`. Title and non-flip hint changes are not named here; see
+ * `classifyLabelChanges`. */
 export function classifyChange(
   oldTool: Record<string, unknown>,
   newTool: Record<string, unknown>,

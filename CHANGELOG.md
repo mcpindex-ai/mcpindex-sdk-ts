@@ -3,9 +3,18 @@
 All notable changes to the TypeScript SDK. Versioning is semver (0.x: minor =
 additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
-## [Unreleased]
+## [0.19.1] - 2026-10-21
 
-Version 0.19.0 in package.json. Not published yet.
+### Security
+
+- A title or annotation hint change that comes with a new optional parameter is now held for review instead of accepted. Before, the gate auto-accepted the parameter and re-pinned the tool, taking the new `title`, `annotations.title`, readOnlyHint, destructiveHint, idempotentHint or openWorldHint with it unreviewed. Guard and strict now hold it the way they hold a description change; monitor still lets the call run and reports it, and no longer re-pins. Lock mode is unchanged. Same as mcpindex-gate.
+- A title or annotation hint change is now held for review wherever it used to go through. A readOnlyHint, destructiveHint, idempotentHint or openWorldHint change on a tool whose definition hash still matches is held in either direction: a tool newly claiming to be read-only or non-destructive is the case a host would run unattended. So is a hint change that comes with a first outputSchema, and a behavioural validation that clears no longer re-pins over a title or hint change. Guard and strict hold these the way they hold a description change; monitor lets the call run and reports it. A title change on a hash-matched tool was already held. Lock mode is unchanged.
+
+### Added
+
+- `classifyLabelChanges` and `LABEL_ONLY_KINDS`, with two new `ChangeKind` members, `title-changed` (tool `title` or `annotations.title` added, removed or changed) and `annotation-hint-changed` (any move of readOnlyHint, destructiveHint, idempotentHint or openWorldHint that `annotation-flip-to-destructive` does not already cover). Labels for a reviewer only: `classifyChange` is unchanged and the kinds never enter a gate verdict. Same output as the Python `classify_label_changes`.
+
+## [0.19.0] - 2026-10-20
 
 ### Added
 
