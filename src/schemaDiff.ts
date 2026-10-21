@@ -44,9 +44,10 @@ export enum ChangeKind {
 
 /** Kinds that tell a reviewer what moved and decide nothing. Mirrors `LABEL_ONLY_KINDS` in
  * corpus_eval/tooling/cse/schema_diff.py. `classifyChange` never emits them and they never
- * enter a gate verdict. The gate calls `classifyLabelChanges` once, just before a benign
- * auto-accept, and holds when any label moved; the kinds are in none of gate.ts's guard,
- * benign or behavioural-mandate sets. */
+ * enter a gate verdict. The gate calls `classifyLabelChanges` from `labelHold` on every path
+ * that would proceed with a moved title or hint or re-pin over one (a benign auto-accept, a
+ * hash match, a behavioural clear) and holds when any label moved; the kinds are in none of
+ * gate.ts's guard, benign or behavioural-mandate sets. */
 export const LABEL_ONLY_KINDS: ReadonlySet<ChangeKind> = new Set([
   ChangeKind.ANNOTATION_HINT_CHANGED,
   ChangeKind.TITLE_CHANGED,
@@ -695,6 +696,26 @@ function headerMirrorChanges(oldSchema: Dict, newSchema: Dict): Change[] {
 
 const ANNOTATION_HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const;
 
+/** What a client must assume when a hint is absent, per the MCP ToolAnnotations schema
+ * (2025-11-25). Absent and the default are the same claim. Mirrors `_HINT_DEFAULTS`. */
+const HINT_DEFAULTS: Readonly<Record<(typeof ANNOTATION_HINTS)[number], boolean>> = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
+/** A hint as the value a client acts on: absent or null is the spec default. */
+function hintValue(hint: (typeof ANNOTATION_HINTS)[number], v: unknown): unknown {
+  return v === undefined || v === null ? HINT_DEFAULTS[hint] : v;
+}
+
+/** The tool `title` for label purposes. "" is absent, as `extraFields` reads it. */
+function toolTitle(tool: Record<string, unknown>): unknown {
+  const t = tool["title"];
+  return t === "" ? null : t;
+}
+
 /** Label equality: undefined and null are the same; a value too deep to compare counts as
  * changed. Mirrors `_label_same`. */
 function labelSame(a: unknown, b: unknown): boolean {
@@ -729,10 +750,13 @@ function flipCovers(hint: string, oldV: unknown, newV: unknown): boolean {
  *
  * Kept out of `classifyChange` because the gate reacts to the presence of a kind: the benign
  * allowlist holds on any kind outside it, and an empty list on a moved hash takes the
- * fail-closed undiffable path. The gate calls it only to refuse a benign auto-accept. Emits TITLE_CHANGED at `title` and `annotations.title`, then
- * ANNOTATION_HINT_CHANGED at `annotations.<hint>` for each of the four MCP hints whose value
- * moved, unless `annotationFlip` already classifies the move. Title text never enters
- * `detail`. */
+ * fail-closed undiffable path. The gate calls it from `labelHold` on a benign auto-accept, a
+ * hash match and a behavioural clear. Emits TITLE_CHANGED at `title` and `annotations.title`,
+ * then ANNOTATION_HINT_CHANGED at `annotations.<hint>` for each of the four MCP hints whose
+ * value moved, unless `annotationFlip` already classifies the move. An absent hint compares
+ * as its spec default (`HINT_DEFAULTS`). A tool `title` of "" compares as absent, the way
+ * `extraFields` reads it on a hash match; `annotations.title` "" stays distinct from absent,
+ * as the hash-match comparison keeps it. Title text never enters `detail`. */
 export function classifyLabelChanges(
   oldTool: Record<string, unknown>,
   newTool: Record<string, unknown>,
@@ -741,7 +765,7 @@ export function classifyLabelChanges(
   const oldAnn = dictish(oldTool["annotations"]);
   const newAnn = dictish(newTool["annotations"]);
   const titles: Array<[string, unknown, unknown]> = [
-    ["title", oldTool["title"], newTool["title"]],
+    ["title", toolTitle(oldTool), toolTitle(newTool)],
     ["annotations.title", oldAnn["title"], newAnn["title"]],
   ];
   for (const [path, oldV, newV] of titles) {
@@ -752,7 +776,7 @@ export function classifyLabelChanges(
   for (const hint of ANNOTATION_HINTS) {
     const oldV = oldAnn[hint];
     const newV = newAnn[hint];
-    if (labelSame(oldV, newV) || flipCovers(hint, oldV, newV)) continue;
+    if (labelSame(hintValue(hint, oldV), hintValue(hint, newV)) || flipCovers(hint, oldV, newV)) continue;
     changes.push(
       mk(ChangeKind.ANNOTATION_HINT_CHANGED, `annotations.${hint}`, `${hint} ${hintWord(oldV)} -> ${hintWord(newV)}`),
     );

@@ -1,5 +1,5 @@
 {
- "about": "Before/after tool pairs for the label-only change kinds. kinds is classify_change, labels is classify_label_changes, gate is the static and effective decision per posture, lock is the check_listing withhold (guard) or flag (monitor) reason. gate and lock were recorded before the label-only kinds existed, except gate for the cases where a title or hint change used to proceed, re-recorded on 2026-10-21 when the gate started holding any title or hint change: beside an added optional parameter or an added outputSchema, and on a hash-matched tool. The TS SDK keeps a byte-identical copy at test/fixtures/schema-diff-label-pairs.json.",
+ "about": "Before/after tool pairs for the label-only change kinds. kinds is classify_change, labels is classify_label_changes, gate is the static and effective decision per posture, lock is the check_listing withhold (guard) or flag (monitor) reason. gate and lock were recorded before the label-only kinds existed, except gate for the cases where a title or hint change used to proceed, re-recorded on 2026-10-21 when the gate started holding any title or hint change: beside an added optional parameter or an added outputSchema, and on a hash-matched tool. Re-recorded again the same day when a hint that goes between absent and its MCP spec default stopped counting as a change: readonly-false-to-absent, destructive-true-to-absent and openworld-true-to-absent lost their label and proceed, and hint-plus-removed-param lost its label. The TS SDK keeps a byte-identical copy at test/fixtures/schema-diff-label-pairs.json.",
  "pairs": [
   {
    "after": {
@@ -227,26 +227,20 @@
    "case": "readonly-false-to-absent",
    "gate": {
     "guard": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "HOLD"
+     "static": "PROCEED"
     },
     "strict": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     }
    },
    "kinds": [],
-   "labels": [
-    {
-     "detail": "readOnlyHint false -> absent",
-     "kind": "annotation-hint-changed",
-     "path": "annotations.readOnlyHint"
-    }
-   ],
+   "labels": [],
    "lock": {
     "guard": "upstream-changed",
     "monitor": "upstream-changed"
@@ -417,26 +411,20 @@
    "case": "destructive-true-to-absent",
    "gate": {
     "guard": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "HOLD"
+     "static": "PROCEED"
     },
     "strict": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     }
    },
    "kinds": [],
-   "labels": [
-    {
-     "detail": "destructiveHint true -> absent",
-     "kind": "annotation-hint-changed",
-     "path": "annotations.destructiveHint"
-    }
-   ],
+   "labels": [],
    "lock": {
     "guard": "upstream-changed",
     "monitor": "upstream-changed"
@@ -729,26 +717,20 @@
    "case": "openworld-true-to-absent",
    "gate": {
     "guard": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     },
     "monitor": {
      "effective": "PROCEED",
-     "static": "HOLD"
+     "static": "PROCEED"
     },
     "strict": {
-     "effective": "HOLD",
-     "static": "HOLD"
+     "effective": "PROCEED",
+     "static": "PROCEED"
     }
    },
    "kinds": [],
-   "labels": [
-    {
-     "detail": "openWorldHint true -> absent",
-     "kind": "annotation-hint-changed",
-     "path": "annotations.openWorldHint"
-    }
-   ],
+   "labels": [],
    "lock": {
     "guard": "upstream-changed",
     "monitor": "upstream-changed"
@@ -1980,13 +1962,7 @@
    "kinds": [
     "removed-param"
    ],
-   "labels": [
-    {
-     "detail": "openWorldHint absent -> true",
-     "kind": "annotation-hint-changed",
-     "path": "annotations.openWorldHint"
-    }
-   ],
+   "labels": [],
    "lock": {
     "guard": "upstream-changed",
     "monitor": "upstream-changed"
