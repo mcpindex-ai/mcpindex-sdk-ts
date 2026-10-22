@@ -112,19 +112,19 @@ test("each pair: gate decisions match the recording under monitor, guard and str
   }
 });
 
-// Re-recorded 2026-10-21: a hint change on a hash-matched tool, either direction, and a hint
-// beside a first outputSchema used to proceed. Same lists as smoke_schema_diff_labels.py.
+// Re-recorded 2026-10-21: a hint change on a hash-matched tool and a hint beside a first
+// outputSchema used to proceed. Every move the label kind covers holds, toward claimed safety or
+// away from it; the two flips are left to the flip kind. readonly-false-to-absent,
+// destructive-true-to-absent and openworld-true-to-absent left this list the same day: absent is
+// the spec default there, so nothing moved. Same lists as smoke_schema_diff_labels.py.
 const HINT_ON_HASH_MATCH = [
   "readonly-absent-to-true",
   "readonly-false-to-true",
-  "readonly-false-to-absent",
   "destructive-true-to-false",
   "destructive-absent-to-false",
-  "destructive-true-to-absent",
   "idempotent-absent-to-true",
   "idempotent-true-to-false",
   "openworld-false-to-true",
-  "openworld-true-to-absent",
   "hint-non-boolean-to-true",
   "hint-number-to-boolean",
   "hint-plus-output-schema-added",
@@ -145,7 +145,7 @@ function assertLabelHold(p: Pair): void {
   }
 }
 
-test("a hint change on a hash-matched tool holds in both directions; outputSchema alone proceeds", () => {
+test("a hint change on a hash-matched tool holds; outputSchema alone proceeds", () => {
   for (const name of HINT_ON_HASH_MATCH) {
     const p = pairs.find((x) => x.case === name)!;
     assert.ok(p.kinds.length === 0 || (p.kinds.length === 1 && p.kinds[0] === "output-schema-added"), name);
@@ -218,4 +218,87 @@ test("a title or hint beside an added optional parameter holds and keeps the pin
     assert.equal(stat.decision, "PROCEED", name);
     assert.ok(stat.reason.includes("PROVEN BENIGN"), stat.reason);
   }
+});
+
+const BASE: ToolDef = {
+  name: "search",
+  description: "search the index",
+  inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+};
+const SPEC_DEFAULTS: Record<string, boolean> = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+const withFields = (fields: Record<string, unknown> = {}): ToolDef => ({ ...clone(BASE), ...clone(fields) });
+
+function decideAll(before: ToolDef, after: ToolDef): Record<string, [string, string, string]> {
+  const out: Record<string, [string, string, string]> = {};
+  for (const posture of [Posture.MONITOR, Posture.GUARD, Posture.STRICT]) {
+    const gate = new Gate({ pin: new PreflightPin(), serverId: "srv", posture });
+    gate.observe("search", clone(before));
+    const [stat, eff] = gate.assess("search", clone(after));
+    out[posture] = [stat.decision, eff.decision, stat.reason];
+  }
+  return out;
+}
+
+test("an annotation too deep to compare holds under guard and strict", () => {
+  // An annotation key nested past the comparison limit made the hash-match comparison hold with
+  // a reason guard did not block on, so a readOnlyHint false -> true flip ran.
+  let deep: unknown = "x";
+  for (let i = 0; i < 70; i++) deep = { k: deep };
+  const before = withFields({ annotations: { readOnlyHint: false, destructiveHint: true, x: deep } });
+  const after = withFields({ annotations: { readOnlyHint: true, destructiveHint: false, x: deep } });
+  for (const [posture, [stat, eff, reason]] of Object.entries(decideAll(before, after))) {
+    assert.equal(stat, "HOLD", `${posture}: ${reason}`);
+    assert.equal(eff, posture === "monitor" ? "PROCEED" : "HOLD", `${posture}: ${reason}`);
+    assert.ok(reason.includes("could not complete"), reason);
+  }
+});
+
+test("a hint between absent and its spec default is no change, for labels and the gate", () => {
+  for (const [hint, dflt] of Object.entries(SPEC_DEFAULTS)) {
+    for (const [before, after] of [
+      [withFields(), withFields({ annotations: { [hint]: dflt } })],
+      [withFields({ annotations: { [hint]: dflt } }), withFields()],
+      [withFields({ annotations: { [hint]: null } }), withFields({ annotations: { [hint]: dflt } })],
+    ] as const) {
+      assert.deepEqual(classifyLabelChanges(before, after), [], `${hint} absent <-> ${dflt}`);
+      // destructiveHint absent -> true is still the flip classifyChange names
+      // (destructive-absent-to-true-existing-flip); only the label hold is gone.
+      if (classifyChange(before, after).length > 0) continue;
+      for (const [posture, [stat, eff, reason]] of Object.entries(decideAll(before, after))) {
+        assert.deepEqual([stat, eff], ["PROCEED", "PROCEED"], `${hint} ${posture}: ${reason}`);
+      }
+    }
+    // The other value against absent is still a move. Two of these are flips, which
+    // classifyChange names instead.
+    const other = withFields({ annotations: { [hint]: !dflt } });
+    for (const [before, after] of [[withFields(), other], [other, withFields()]] as const) {
+      const labels = classifyLabelChanges(before, after).map((c) => c.path);
+      const flip = classifyChange(before, after);
+      assert.ok(
+        (labels.length === 1 && labels[0] === `annotations.${hint}`) || flip.length > 0,
+        `${hint} absent <-> ${!dflt}: ${JSON.stringify(labels)}`,
+      );
+    }
+  }
+});
+
+test("an empty tool title is absent to the label and the gate; an empty annotations.title is not, to either", () => {
+  for (const [before, after] of [
+    [withFields({ title: "" }), withFields()],
+    [withFields(), withFields({ title: "" })],
+  ] as const) {
+    assert.deepEqual(classifyLabelChanges(before, after), []);
+    for (const [posture, [stat, eff, reason]] of Object.entries(decideAll(before, after))) {
+      assert.deepEqual([stat, eff], ["PROCEED", "PROCEED"], `${posture}: ${reason}`);
+    }
+  }
+  const before = withFields({ annotations: { title: "" } });
+  const after = withFields({ annotations: {} });
+  assert.deepEqual(classifyLabelChanges(before, after).map((c) => c.path), ["annotations.title"]);
+  assert.equal(decideAll(before, after)["guard"]![1], "HOLD");
 });

@@ -3,6 +3,18 @@
 All notable changes to the TypeScript SDK. Versioning is semver (0.x: minor =
 additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
+## [0.19.2] - 2026-10-21
+
+### Security
+
+- A hash-matched tool whose annotations nest a key deeper than the gate compares (64 levels) is now held under guard. The comparison already held it, but with a reason guard did not block on, so guard ran the call with a notice, and a readOnlyHint false -> true or destructiveHint true -> false move beside the deep key went through. Strict already held it; guard now holds it too, like every other comparison that could not complete; monitor lets the call run and reports it. Same as mcpindex-gate 0.22.2.
+
+### Changed
+
+- A hint that goes between absent and its MCP spec default (readOnlyHint false, destructiveHint true, idempotentHint false, openWorldHint true) is no longer a change. `classifyLabelChanges` does not report it and the gate does not hold it. destructiveHint going from absent to true is still `annotation-flip-to-destructive`, handled as before.
+- A tool `title` that goes between "" and absent is no longer labelled `title-changed`. The hash-match comparison has always read an empty title as absent and let it through, so the label now agrees. `annotations.title` "" still differs from absent in both.
+- The 0.19.1 note that a hint change on a hash-matched tool "is held in either direction" was wrong. Every move `annotation-hint-changed` covers is held, readOnlyHint gaining true and destructiveHint going to false included. destructiveHint gaining true and readOnlyHint losing true are annotation flips: they go to the existing inconclusive and destructive handling, and a behavioural clear can re-pin them.
+
 ## [0.19.1] - 2026-10-21
 
 ### Security

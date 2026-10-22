@@ -1129,7 +1129,9 @@ export class Gate {
         return this.driftHold(
           pinned.toolName,
           [],
-          "a tool field outside the definition hash could not be compared; fail-closed HOLD",
+          // "could not complete" is a DANGEROUS_REASON_MARKERS entry, so guard blocks this as
+          // it does every other fail-closed comparison error.
+          "the comparison of a tool field outside the definition hash could not complete; fail-closed HOLD",
           HoldClass.FINDING,
         );
       }
@@ -1419,9 +1421,14 @@ export class Gate {
   /** A HOLD when `classifyLabelChanges` reports a title or annotation hint change against
    * the pin, else null. Called on every path that would otherwise proceed with a moved title
    * or hint or re-pin over one: the benign auto-accept, a hash match, and a behavioural
-   * clear. A title is text the model reads; a hint decides what a host lets run unattended,
-   * in either direction. The hash covers neither, and the label kinds stay out of `drift` so
-   * no kind set, hold class or telemetry row moves. Mirrors gate.py `_label_hold`. */
+   * clear. A title is text the model reads; a hint decides what a host lets run unattended.
+   * Every hint move that `classifyLabelChanges` reports holds here, a move toward claimed
+   * safety (readOnlyHint gaining true, destructiveHint going to false) included. The two moves
+   * it leaves to `classifyChange`, destructiveHint gaining true and readOnlyHint losing true,
+   * are annotation flips: they take the inconclusive and destructive handling, and a
+   * behavioural clear may re-pin them. A hint that goes between absent and its spec default
+   * has not moved. The hash covers neither titles nor hints, and the label kinds stay out of
+   * `drift` so no kind set, hold class or telemetry row moves. Mirrors gate.py `_label_hold`. */
   private labelHold(name: string, drift: Change[], pinnedSchema: ToolDef | null, observed: ToolDef): PreflightVerdict | null {
     let labels: string[];
     try {
