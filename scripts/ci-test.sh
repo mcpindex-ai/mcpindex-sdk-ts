@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Public CI and the npm release job run this. `npm test` stays the full suite
-# and fails closed when the private Python tree is absent. That is correct,
-# and it is what mcpindex-trust runs. Here we name the files we do not run.
+# Public CI and the npm release job run this. `npm test` is the full suite. Its
+# live-Python parity tests skip with a printed reason when the mcpindex-trust tree
+# is absent (test/pythonTree.ts); MCPINDEX_PARITY_REQUIRED=1 makes them fail
+# instead. mcpindex-trust runs them. Here we name the files we do not run.
 set -eu
 cd "$(dirname "$0")/.."
 

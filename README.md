@@ -21,24 +21,21 @@ Peer dependency: `@modelcontextprotocol/sdk` >=1.0.0 <2 (the wrapper gates by se
 ```ts
 import { wrap } from '@mcp-index/sdk';
 
-// wrap an already-connected MCP client session
-const guarded = wrap(session);   // in-memory pins for this process only
+// wrap an already-connected MCP client session; a stable serverId keeps pins on disk
+const guarded = wrap(session, { serverId: 'my-mcp-server' });
 
 // use `guarded` exactly like `session`; a drifted contract is HELD before the call
 // fires. A PreflightHold surfaces (Guard/Strict) so you can route the agent to
 // Review / Re-pin / Validate.
 ```
 
-`wrap(session)` with no server id keeps an **in-memory** pin baseline that dies
-with the process. Pass a stable server id and the baseline is kept on disk and
-survives restarts, under `MCPINDEX_STATE_DIR/pins/<server id>.json` or
-`~/.mcpindex/pins/<server id>.json`:
-
-```ts
-import { wrap } from '@mcp-index/sdk';
-
-const guarded = wrap(session, { serverId: 'my-mcp-server' }); // pins on disk
-```
+The `serverId` is what makes the baseline survive restarts: pins go to
+`MCPINDEX_STATE_DIR/pins/<server id>.json` or `~/.mcpindex/pins/<server id>.json`,
+and the next process compares against them. `wrap(session)` with no server id keeps an
+**in-memory** baseline that dies with the process, so a contract that changed while
+your agent was down is pinned fresh on the next start and never held. Passing
+`pin: new PreflightPin()` does the same even alongside a `serverId`: a `PreflightPin`
+built without a path is in memory, and an explicit `pin` wins over the default store.
 
 `pinStore: 'memory'` keeps pins in the process even with a server id, and
 `pinStore: 'file'` forces the file store without one. You can also pass your own
@@ -94,10 +91,14 @@ npm i -g @mcp-index/sdk   # then:
 mcpindex login            # opens your browser; captures the key on a loopback listener
 mcpindex login --provider google   # sign in with Google instead of GitHub (default: github)
 mcpindex whoami           # shows sign-in state (never prints the key)
+mcpindex --version        # prints the installed version
 
 # or without a global install:
 npx -p @mcp-index/sdk mcpindex login
 ```
+
+Every command takes `--help` / `-h`, which prints usage and does nothing else. An
+unknown flag or extra argument prints usage to stderr and exits 2 without signing in.
 
 The key is minted server-side after GitHub OAuth and handed to a one-shot HTTP listener
 bound to `127.0.0.1` - it never transits a third party. Point `MCPINDEX_WEB_BASE` at a
@@ -116,7 +117,8 @@ different host to override the default (`https://mcpindex.ai`).
   type/enum/removed, ...) plus an injection/exfil marker scan over input and output schema.
 - **HOLDs** the call with the mcpindex hold banner when the contract drifted; **PROCEEDs** silently
   on a benign change (no false alarm).
-- Postures: `Monitor` (notify + proceed) / `Guard` (default; hold dangerous) /
+- Postures: `Monitor` (notify + proceed: a call guard or strict would hold runs, and
+  stderr gets one line per tool and reason) / `Guard` (default; hold dangerous) /
   `Strict` (hold any drift).
 - Grades each call's **blast radius** (Tier-0a action classification) on the verdict:
   action type (read / write / delete / send / ...), reversibility, egress, and a static

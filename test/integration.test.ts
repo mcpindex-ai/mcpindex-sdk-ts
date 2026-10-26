@@ -143,7 +143,10 @@ test("e2e: a REAL drift (added-required) -> HOLD, and the real tool is NOT invok
       assert.ok(err instanceof PreflightHold, "should raise PreflightHold");
       assert.equal(err.verdict.decision, "HOLD");
       assert.match(err.message, /did not forward this call/);
-      assert.match(err.message, /escalation was not attempted/);
+      // The listing withheld it; the call's hold names the change the listing found.
+      assert.match(err.verdict.reason, /escalation was not attempted/);
+      assert.match(err.message, /added-required-param at properties\.token/);
+      assert.doesNotMatch(err.message, /No contract comparison was possible/);
       assert.ok(!/\[Review/.test(err.message), "no affordance chrome on the agent channel");
       assert.ok(!/this month/.test(err.message), "no engagement tally on the agent channel");
       return true;

@@ -14,7 +14,7 @@
 import { assignOwn, listedFields } from "./contractFields.js";
 import { approvalDigest } from "./canonical.js";
 import { Gate, Posture } from "./gate.js";
-import { Decision, type ToolDef } from "./preflight.js";
+import { Decision, HoldClass, makeVerdict, type PreflightVerdict, type ToolDef } from "./preflight.js";
 
 export const MAX_LISTED_TOOLS = 2000;
 
@@ -31,6 +31,9 @@ export interface WithheldNotice {
   definition: ToolDef | null;
   /** False for a duplicate name, a wrong JSON type, or a check that raised. */
   reviewable: boolean;
+  /** The gate's effective verdict when a comparison withheld the tool; null when the entry
+   * never reached the gate (duplicate, wrong JSON type, a check that raised). */
+  verdict?: PreflightVerdict | null;
 }
 
 export interface ListingOutcome {
@@ -38,15 +41,36 @@ export interface ListingOutcome {
   withheld: WithheldNotice[];
 }
 
-export function withheldCallVerdict(serverId: string, toolName: string) {
-  return {
-    serverId,
-    toolName,
-    decision: Decision.HOLD,
-    reason: WITHHELD_CALL_REASON,
-    isContractDiff: false,
-    holdClass: "uncheckable" as const,
-  };
+/**
+ * The HOLD for a call to a tool the listing withheld. It carries the listing's reason, and
+ * when the gate compared and found a change, that verdict's class and drift, so the hold
+ * message names the change instead of claiming no comparison was possible.
+ */
+export function withheldCallVerdict(
+  serverId: string,
+  toolName: string,
+  listing: Pick<WithheldNotice, "reason" | "verdict"> | null = null,
+): PreflightVerdict {
+  const held = listing?.verdict ?? null;
+  // The gate's own reason is the specific one ("inconclusive" in the notice is a summary).
+  const why = held?.reason || listing?.reason || "";
+  const reason =
+    why.length > 0
+      ? `withheld from the tool list (${why}); escalation was not attempted for a withheld tool`
+      : WITHHELD_CALL_REASON;
+  if (held === null) {
+    return makeVerdict({
+      serverId,
+      toolName,
+      decision: Decision.HOLD,
+      reason,
+      isContractDiff: false,
+      holdClass: HoldClass.UNCHECKABLE,
+    });
+  }
+  let holdClass = held.holdClass ?? HoldClass.UNSET;
+  if (holdClass === HoldClass.UNSET) holdClass = held.isContractDiff ? HoldClass.DRIFT : HoldClass.UNCHECKABLE;
+  return makeVerdict({ ...held, serverId, toolName, decision: Decision.HOLD, reason, holdClass });
 }
 
 export function rawToolEntries(result: unknown): unknown[] {
@@ -134,10 +158,16 @@ function judge(
   const effective = assessed[1];
   if (effective.decision === Decision.PROCEED) return null;
   const reason = effective.decision === Decision.INCONCLUSIVE ? "inconclusive" : effective.reason || "held";
-  return notice(gate, name, reason, entry);
+  return notice(gate, name, reason, entry, effective);
 }
 
-function notice(gate: Gate, name: string, reason: string, entry: unknown): WithheldNotice {
+function notice(
+  gate: Gate,
+  name: string,
+  reason: string,
+  entry: unknown,
+  verdict: PreflightVerdict | null = null,
+): WithheldNotice {
   const contract = publicContract(entry);
   const reviewable =
     reason !== "listing check failed" &&
@@ -151,6 +181,7 @@ function notice(gate: Gate, name: string, reason: string, entry: unknown): Withh
     definitionHash: hashOrBlank(contract),
     definition: contract,
     reviewable,
+    verdict,
   };
 }
 

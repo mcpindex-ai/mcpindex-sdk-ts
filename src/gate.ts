@@ -671,8 +671,9 @@ export function assembleHoldMessage(
         : "the pin is a file under ~/.mcpindex/pins/";
     lines.push(
       "",
-      `Checkable locally: ${anchor}, and \`mcpindex-report\` prints the record. ` +
-        "A remote server can write neither.",
+      // mcpindex-report ships in the Python package only; `npx mcpindex` has no report command.
+      `Checkable locally: ${anchor}, and \`mcpindex-report\` from the Python package ` +
+        "mcpindex-gate prints the record. A remote server can write neither.",
     );
   }
 

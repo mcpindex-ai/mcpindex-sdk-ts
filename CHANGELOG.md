@@ -3,6 +3,27 @@
 All notable changes to the TypeScript SDK. Versioning is semver (0.x: minor =
 additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
+## [Unreleased]
+
+## [0.19.3] - 2026-10-26
+
+### Fixed
+
+- `mcpindex login` ignored every argument except `--provider`, so `mcpindex login --help`, `-h` or a mistyped flag started the real browser sign-in and stored a new key. Arguments are now parsed before anything runs: `--help` / `-h` print usage and exit 0 for every command and for the bare binary; an unknown flag or extra argument prints usage to stderr and exits 2. Neither starts the loopback listener or opens a browser. `whoami --help` no longer prints sign-in state.
+- A call to a tool the listing withheld said "No contract comparison was possible here", with the fixed reason "withheld from the tool list", even when the gate had compared and found a description or schema change. The reason reached only stderr or `onWithheld`. The call's hold now carries the listing's verdict: its class, its drift rows and its reason, so the message names the change. Entries withheld without a comparison (duplicate name, wrong JSON type) still say so, with that reason.
+
+- Monitor posture did not notify. A drifted call ran with only the ambient line a clean call gets, and `onHold` / `onWithheld` never fire under monitor. It now writes one stderr line per tool and reason per session naming what guard or strict would have held. The decision is unchanged.
+
+### Added
+
+- `mcpindex --version` prints the package version.
+
+### Docs
+
+- The quickstart now shows `wrap(session, { serverId })`, the form that keeps pins on disk across restarts, and says that `wrap(session)` or an explicit `pin: new PreflightPin()` keeps them in memory only.
+- A hold message's local anchor named `mcpindex-report` as if this package shipped it. It ships in the Python package mcpindex-gate, and the message now says so.
+- The 0.19.0 entry said mcp.lock revision 1d. That release vendored and tested the revision 1e vectors; the entry now says 1e.
+
 ## [0.19.2] - 2026-10-21
 
 ### Security
@@ -30,7 +51,7 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ### Added
 
-- Lock mode, in three new subpaths. It follows mcp.lock draft 1, revision 1d, which is not stable: files carry `lockVersion: "1-draft"` and a later reader will refuse them. It is opt-in, and the root `@mcp-index/sdk` import does not load any of it.
+- Lock mode, in three new subpaths. It follows mcp.lock draft 1, revision 1e, which is not stable: files carry `lockVersion: "1-draft"` and a later reader will refuse them. It is opt-in, and the root `@mcp-index/sdk` import does not load any of it.
 - `@mcp-index/sdk/lock`: reads and writes a lock in `.mcp/lock/` and `.mcp/contracts/`, checks each `tools/list` against it, and refuses calls to tools that are not approved with error -32011. `lockClient` and `LockedTransport` put it in front of the official MCP client. `FileLockStore` approves and revokes, verifies a signed manifest when a signer is configured, and refuses a `sequencePath` or `trustedRootPath` inside the lock's repository. Listing and refusal events go to a sink you pass.
 - `@mcp-index/sdk/lock/pg`: `PgLockStore`, a Postgres store with append-only hash-chained records, row-level security, `app-scoped` and `role-bound` tenancy, two roles, and an optional signed head that needs a sequence store.
 - `@mcp-index/sdk/ai`: `lockTransport` for `createMCPClient` from the Vercel AI SDK.
