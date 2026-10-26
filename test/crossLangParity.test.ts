@@ -24,6 +24,7 @@ import { PreflightPin, Decision, ToolDef } from "../src/preflight.js";
 import { classifyChange, classifyLabelChanges, ChangeKind, LABEL_ONLY_KINDS } from "../src/schemaDiff.js";
 import { STRING_KEYS, scanSchemaHasMarker, RESULT_MARKER_SOURCES } from "../src/scan.js";
 import { redactGreenWords, assertNoGreenWords } from "../src/provenance.js";
+import { PY_TREE_SKIP } from "./pythonTree.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -245,7 +246,7 @@ test("scan (exfil precision): a BARE URL is clean, a URL in a verb context flags
 //     _STRING_KEYS superset check above.
 // ---------------------------------------------------------------------------
 
-test("RESULT-SCAN PARITY: the TS result markers are byte-identical to the live Python result_scan markers", () => {
+test("RESULT-SCAN PARITY: the TS result markers are byte-identical to the live Python result_scan markers", { skip: PY_TREE_SKIP }, () => {
   let pyPatterns: { credential: string; exfil: string; injection: string };
   try {
     // result_scan re-exports the schema_scan compiled patterns; read THEIR .pattern
@@ -285,7 +286,7 @@ test("RESULT-SCAN PARITY: the TS result markers are byte-identical to the live P
   assert.equal(norm(RESULT_MARKER_SOURCES.injection), norm(pyPatterns.injection), "injection marker diverged from Python");
 });
 
-test("PARITY ASSERTION: the TS scan key-set COVERS the live Python schema_scan._STRING_KEYS", () => {
+test("PARITY ASSERTION: the TS scan key-set COVERS the live Python schema_scan._STRING_KEYS", { skip: PY_TREE_SKIP }, () => {
   let pyKeys: string[];
   try {
     const out = execFileSync(
@@ -348,7 +349,7 @@ test("H-MIRROR PARITY: only the dangerous direction — a mirror REMOVED is not 
   assert.ok(!kinds.includes(ChangeKind.PARAM_MIRRORED_TO_HEADER), `removal must not fire: ${kinds.join(",")}`);
 });
 
-test("PARITY ASSERTION: the TS ChangeKind taxonomy COVERS the live Python ChangeKind", () => {
+test("PARITY ASSERTION: the TS ChangeKind taxonomy COVERS the live Python ChangeKind", { skip: PY_TREE_SKIP }, () => {
   // The general fix for the class of bug above. PARAM_MIRRORED_TO_HEADER existed in
   // Python while TS had never heard of it, and no test noticed, because every parity
   // test here enumerated specific BEHAVIOURS. This reads the live enum instead, so the
@@ -381,7 +382,7 @@ test("PARITY ASSERTION: the TS ChangeKind taxonomy COVERS the live Python Change
   assert.deepEqual(missing, [], `TS taxonomy is MISSING Python kinds (the client cannot explain them): ${missing.join(", ")}`);
 });
 
-test("PARITY ASSERTION: the TS GUARD dangerous set EQUALS the live Python _GUARD_DANGEROUS_KINDS", () => {
+test("PARITY ASSERTION: the TS GUARD dangerous set EQUALS the live Python _GUARD_DANGEROUS_KINDS", { skip: PY_TREE_SKIP }, () => {
   // The taxonomy assertion above only checks that both clients can NAME a kind.
   // PARAM_MIRRORED_TO_HEADER was in both taxonomies and still absent from both
   // guard sets, so default guard forwarded it while strict held it. Membership
@@ -408,7 +409,7 @@ test("PARITY ASSERTION: the TS GUARD dangerous set EQUALS the live Python _GUARD
   );
 });
 
-test("LABEL PARITY: both languages emit identical kinds for the label-pair corpus", () => {
+test("LABEL PARITY: both languages emit identical kinds for the label-pair corpus", { skip: PY_TREE_SKIP }, () => {
   // The TS fixture must be the Python one byte for byte, so the recorded labels and gate
   // decisions both suites assert are the same table. Then every pair goes through live
   // Python (classify_change + classify_label_changes) and through TS, and the full Change
@@ -451,7 +452,7 @@ test("LABEL PARITY: both languages emit identical kinds for the label-pair corpu
   });
 });
 
-test("LABEL GATE PARITY: both languages reach the same static and effective decision on every label pair", () => {
+test("LABEL GATE PARITY: both languages reach the same static and effective decision on every label pair", { skip: PY_TREE_SKIP }, () => {
   // The fixture records the decisions, but each suite checks only its own gate against it.
   // This runs every pair under monitor, guard and strict through live Python Gate.assess
   // and through the TS gate and compares the pairs of decisions directly.

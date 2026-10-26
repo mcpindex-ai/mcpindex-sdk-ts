@@ -26,6 +26,7 @@ import {
 import { ChangeKind } from "../src/schemaDiff.js";
 import { plainProse, plainText } from "../src/render.js";
 import { Decision, HoldClass, makeVerdict } from "../src/preflight.js";
+import { PY_TREE_SKIP } from "./pythonTree.js";
 
 function heldVerdict(overrides: Record<string, unknown> = {}) {
   return makeVerdict({
@@ -503,7 +504,7 @@ test("the chip allowlist cannot be widened to admit an affordance", () => {
   }
 });
 
-test("every agent-channel constant is byte-identical to the Python twin", async () => {
+test("every agent-channel constant is byte-identical to the Python twin", { skip: PY_TREE_SKIP }, async () => {
   // THE GAP THIS CLOSES, found the moment it was written: the round-7 fix for
   // UNCHECKABLE_DISPOSITION_NOTE landed in Python and NOT here, so this client shipped
   // "No baseline exists for this tool in this session" - false on six of seven producers,

@@ -25,6 +25,7 @@ import {
   type DriftTransport,
 } from "../src/driftTelemetry.js";
 import { ChangeKind, type Change } from "../src/schemaDiff.js";
+import { PY_TREE_SKIP } from "./pythonTree.js";
 
 // dist/test/<file>.js -> up four to the repo root (rootDir is "."), then into corpus_eval,
 // the package root from which `tooling.cse.drift_telemetry` imports (mirrors `make ci`).
@@ -255,7 +256,7 @@ function pyFingerprints(vectors: Array<[string, string | null]>): string[] {
   return JSON.parse(raw.trim());
 }
 
-test("cross-language fingerprint parity: TS == live Python (byte-identical)", () => {
+test("cross-language fingerprint parity: TS == live Python (byte-identical)", { skip: PY_TREE_SKIP }, () => {
   const vectors: Array<[string, string | null]> = [
     ["srv", null],
     ["https://example.com/mcp", null],
@@ -268,13 +269,16 @@ test("cross-language fingerprint parity: TS == live Python (byte-identical)", ()
   assert.deepEqual(tsFps, pyFps);
 });
 
-test("contextFp: pinned vector, byte-identical to Python, disjoint from the tool key", () => {
+test("contextFp: pinned vector, disjoint from the tool key", () => {
   // Pin mirrors _KNOWN_CONTEXT_FP in tooling/smoke_drift_telemetry.py.
   assert.equal(contextFp("srv-1"), "5fef9f8e3d6595feca86dda0d2ee1319");
   // A real tool named "(server)" and a separator-embedding server id both live under the
   // other HMAC key, so neither can reach a context fingerprint.
   assert.notEqual(contextFp("srv-1"), toolFp("srv-1", "(server)"));
   assert.notEqual(contextFp("a\x1fbc"), toolFp("a", "bc"));
+});
+
+test("contextFp: byte-identical to live Python", { skip: PY_TREE_SKIP }, () => {
   const py = [
     "import sys",
     "from tooling.cse.drift_telemetry import context_fp",
