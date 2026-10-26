@@ -45,7 +45,7 @@ import type { BehavioralVerifier } from "./gate.js";
 import { Decision, HoldClass, PreflightPin, defaultPinStorePath, makeVerdict, utcNowIso } from "./preflight.js";
 import {
   MAX_LISTED_TOOLS,
-  WITHHELD_CALL_REASON,
+  withheldCallVerdict,
   filterListing,
   rawToolEntries,
   replaceToolList,
@@ -346,7 +346,8 @@ class Interceptor {
   // rides stderr + the optional observer only. See `noteAmbient`.
   private readonly ambient: AmbientNotifier;
   private readonly observed = new Map<string, ToolDef>();
-  private readonly withheldNames = new Set<string>();
+  /** Tools the listing withheld, with the notice that says why (reason and verdict). */
+  private readonly withheldNames = new Map<string, WithheldNotice>();
   private listingNames = new Set<string>();
   private priorNames = new Set<string>();
   // The inner client's own listTools, captured before the refresh hook replaces it.
@@ -649,7 +650,7 @@ class Interceptor {
         ? prior[0]!.launchKey
         : undefined;
     for (const notice of notices) {
-      this.withheldNames.add(notice.toolName);
+      this.withheldNames.set(notice.toolName, notice);
       if (notice.reviewable && notice.definition !== null) {
         try {
           recordPending(pendingPath(defaultStateDir()), {
@@ -1096,15 +1097,9 @@ class Interceptor {
       this.recordCall(name, verdict, verdict);
       return verdict;
     }
-    if (this.withheldNames.has(name)) {
-      const verdict = makeVerdict({
-        serverId: this.gate.serverId,
-        toolName: name,
-        decision: Decision.HOLD,
-        reason: WITHHELD_CALL_REASON,
-        isContractDiff: false,
-        holdClass: HoldClass.UNCHECKABLE,
-      });
+    const withheld = this.withheldNames.get(name);
+    if (withheld !== undefined) {
+      const verdict = withheldCallVerdict(this.gate.serverId, name, withheld);
       this.recordCall(name, verdict, verdict);
       return verdict;
     }

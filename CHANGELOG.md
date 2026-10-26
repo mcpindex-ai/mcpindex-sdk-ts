@@ -8,6 +8,7 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 ### Fixed
 
 - `mcpindex login` ignored every argument except `--provider`, so `mcpindex login --help`, `-h` or a mistyped flag started the real browser sign-in and stored a new key. Arguments are now parsed before anything runs: `--help` / `-h` print usage and exit 0 for every command and for the bare binary; an unknown flag or extra argument prints usage to stderr and exits 2. Neither starts the loopback listener or opens a browser. `whoami --help` no longer prints sign-in state.
+- A call to a tool the listing withheld said "No contract comparison was possible here", with the fixed reason "withheld from the tool list", even when the gate had compared and found a description or schema change. The reason reached only stderr or `onWithheld`. The call's hold now carries the listing's verdict: its class, its drift rows and its reason, so the message names the change. Entries withheld without a comparison (duplicate name, wrong JSON type) still say so, with that reason.
 
 ### Added
 
