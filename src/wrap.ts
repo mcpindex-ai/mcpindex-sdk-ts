@@ -348,6 +348,8 @@ class Interceptor {
   private readonly observed = new Map<string, ToolDef>();
   /** Tools the listing withheld, with the notice that says why (reason and verdict). */
   private readonly withheldNames = new Map<string, WithheldNotice>();
+  /** (tool, reason) pairs monitor has already reported this session. */
+  private readonly monitorNoted = new Set<string>();
   private listingNames = new Set<string>();
   private priorNames = new Set<string>();
   // The inner client's own listTools, captured before the refresh hook replaces it.
@@ -845,6 +847,27 @@ class Interceptor {
     throw new PreflightHold(verdict, prov, banner, presentation);
   }
 
+  /** MONITOR posture runs a call guard or strict would have held. Say so on stderr, once per
+   * tool and reason per session, so "notify and proceed" notifies. Never stdout, never a
+   * change to the decision. */
+  private noteMonitored(stat: PreflightVerdict, effective: PreflightVerdict): void {
+    if (stat.decision === Decision.PROCEED || effective.decision !== Decision.PROCEED) return;
+    try {
+      const key = `${stat.toolName}\x00${stat.reason}`;
+      if (this.monitorNoted.has(key)) return;
+      if (this.monitorNoted.size >= MONITOR_NOTED_CAP) return;
+      this.monitorNoted.add(key);
+      // The reason can quote tool-controlled text: drop control characters and bound it.
+      const reason = stat.reason.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").slice(0, 400);
+      process.stderr.write(
+        `mcpindex: monitor posture, ${safeLabel(stat.serverId)}/${safeLabel(stat.toolName)} ` +
+          `would be held (${stat.decision}): ${reason}. Proceeding; posture guard or strict holds it.\n`,
+      );
+    } catch {
+      // a notice must never perturb the call
+    }
+  }
+
   /** MONITOR-posture notice: surface the result-taint to stderr (never stdout, never
    * the gate decision), best-effort, then proceed. Mirrors the ambient channel's
    * stderr-only rule and Python `_note_result_taint`. */
@@ -1108,6 +1131,7 @@ class Interceptor {
       const committed = this.gate.commit(assessed[0], assessed[2]);
       let stat = this.maybeAutoValidate(name, committed[0]);
       const verdict = this.gate.applyPosture(stat);
+      if (this.gate.posture === Posture.MONITOR) this.noteMonitored(stat, verdict);
       this.recordCall(name, stat, verdict);
       return verdict;
     } catch (exc) {
@@ -1271,6 +1295,8 @@ function warn(verdict: PreflightVerdict): void {
       `${verdict.serverId}/${verdict.toolName} — ${verdict.reason}\n`,
   );
 }
+
+const MONITOR_NOTED_CAP = 1000;
 
 // The wrapper's OWN management methods — names that shadow delegation.
 const OWN_METHODS = new Set([

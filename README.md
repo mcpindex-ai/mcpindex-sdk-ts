@@ -120,7 +120,8 @@ different host to override the default (`https://mcpindex.ai`).
   type/enum/removed, ...) plus an injection/exfil marker scan over input and output schema.
 - **HOLDs** the call with the mcpindex hold banner when the contract drifted; **PROCEEDs** silently
   on a benign change (no false alarm).
-- Postures: `Monitor` (notify + proceed) / `Guard` (default; hold dangerous) /
+- Postures: `Monitor` (notify + proceed: a call guard or strict would hold runs, and
+  stderr gets one line per tool and reason) / `Guard` (default; hold dangerous) /
   `Strict` (hold any drift).
 - Grades each call's **blast radius** (Tier-0a action classification) on the verdict:
   action type (read / write / delete / send / ...), reversibility, egress, and a static
