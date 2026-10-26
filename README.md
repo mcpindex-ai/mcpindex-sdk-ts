@@ -21,24 +21,21 @@ Peer dependency: `@modelcontextprotocol/sdk` >=1.0.0 <2 (the wrapper gates by se
 ```ts
 import { wrap } from '@mcp-index/sdk';
 
-// wrap an already-connected MCP client session
-const guarded = wrap(session);   // in-memory pins for this process only
+// wrap an already-connected MCP client session; a stable serverId keeps pins on disk
+const guarded = wrap(session, { serverId: 'my-mcp-server' });
 
 // use `guarded` exactly like `session`; a drifted contract is HELD before the call
 // fires. A PreflightHold surfaces (Guard/Strict) so you can route the agent to
 // Review / Re-pin / Validate.
 ```
 
-`wrap(session)` with no server id keeps an **in-memory** pin baseline that dies
-with the process. Pass a stable server id and the baseline is kept on disk and
-survives restarts, under `MCPINDEX_STATE_DIR/pins/<server id>.json` or
-`~/.mcpindex/pins/<server id>.json`:
-
-```ts
-import { wrap } from '@mcp-index/sdk';
-
-const guarded = wrap(session, { serverId: 'my-mcp-server' }); // pins on disk
-```
+The `serverId` is what makes the baseline survive restarts: pins go to
+`MCPINDEX_STATE_DIR/pins/<server id>.json` or `~/.mcpindex/pins/<server id>.json`,
+and the next process compares against them. `wrap(session)` with no server id keeps an
+**in-memory** baseline that dies with the process, so a contract that changed while
+your agent was down is pinned fresh on the next start and never held. Passing
+`pin: new PreflightPin()` does the same even alongside a `serverId`: a `PreflightPin`
+built without a path is in memory, and an explicit `pin` wins over the default store.
 
 `pinStore: 'memory'` keeps pins in the process even with a server id, and
 `pinStore: 'file'` forces the file store without one. You can also pass your own

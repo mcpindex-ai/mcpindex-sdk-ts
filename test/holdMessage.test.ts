@@ -82,7 +82,7 @@ test("call-sent row carries argument NAMES only, and is omitted when unknown", (
 test("local anchor renders only when a real pin path exists", () => {
   const withPin = renderHoldMessage(heldVerdict(), null, "/home/u/.mcpindex/pins/acme.json");
   assert.match(withPin, /Checkable locally/);
-  assert.match(withPin, /mcpindex-report/);
+  assert.match(withPin, /`mcpindex-report` from the Python package mcpindex-gate/);
   // TS pins are in-memory: naming a path that does not exist would forfeit the credibility
   // the line is there to buy.
   const without = renderHoldMessage(heldVerdict(), null, null);

@@ -16,6 +16,12 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 - `mcpindex --version` prints the package version.
 
+### Docs
+
+- The quickstart now shows `wrap(session, { serverId })`, the form that keeps pins on disk across restarts, and says that `wrap(session)` or an explicit `pin: new PreflightPin()` keeps them in memory only.
+- A hold message's local anchor named `mcpindex-report` as if this package shipped it. It ships in the Python package mcpindex-gate, and the message now says so.
+- The 0.19.0 entry said mcp.lock revision 1d. That release vendored and tested the revision 1e vectors; the entry now says 1e.
+
 ## [0.19.2] - 2026-10-21
 
 ### Security
@@ -43,7 +49,7 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ### Added
 
-- Lock mode, in three new subpaths. It follows mcp.lock draft 1, revision 1d, which is not stable: files carry `lockVersion: "1-draft"` and a later reader will refuse them. It is opt-in, and the root `@mcp-index/sdk` import does not load any of it.
+- Lock mode, in three new subpaths. It follows mcp.lock draft 1, revision 1e, which is not stable: files carry `lockVersion: "1-draft"` and a later reader will refuse them. It is opt-in, and the root `@mcp-index/sdk` import does not load any of it.
 - `@mcp-index/sdk/lock`: reads and writes a lock in `.mcp/lock/` and `.mcp/contracts/`, checks each `tools/list` against it, and refuses calls to tools that are not approved with error -32011. `lockClient` and `LockedTransport` put it in front of the official MCP client. `FileLockStore` approves and revokes, verifies a signed manifest when a signer is configured, and refuses a `sequencePath` or `trustedRootPath` inside the lock's repository. Listing and refusal events go to a sink you pass.
 - `@mcp-index/sdk/lock/pg`: `PgLockStore`, a Postgres store with append-only hash-chained records, row-level security, `app-scoped` and `role-bound` tenancy, two roles, and an optional signed head that needs a sequence store.
 - `@mcp-index/sdk/ai`: `lockTransport` for `createMCPClient` from the Vercel AI SDK.
