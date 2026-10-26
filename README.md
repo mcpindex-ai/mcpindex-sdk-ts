@@ -94,10 +94,14 @@ npm i -g @mcp-index/sdk   # then:
 mcpindex login            # opens your browser; captures the key on a loopback listener
 mcpindex login --provider google   # sign in with Google instead of GitHub (default: github)
 mcpindex whoami           # shows sign-in state (never prints the key)
+mcpindex --version        # prints the installed version
 
 # or without a global install:
 npx -p @mcp-index/sdk mcpindex login
 ```
+
+Every command takes `--help` / `-h`, which prints usage and does nothing else. An
+unknown flag or extra argument prints usage to stderr and exits 2 without signing in.
 
 The key is minted server-side after GitHub OAuth and handed to a one-shot HTTP listener
 bound to `127.0.0.1` - it never transits a third party. Point `MCPINDEX_WEB_BASE` at a

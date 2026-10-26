@@ -3,6 +3,16 @@
 All notable changes to the TypeScript SDK. Versioning is semver (0.x: minor =
 additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
+## [Unreleased]
+
+### Fixed
+
+- `mcpindex login` ignored every argument except `--provider`, so `mcpindex login --help`, `-h` or a mistyped flag started the real browser sign-in and stored a new key. Arguments are now parsed before anything runs: `--help` / `-h` print usage and exit 0 for every command and for the bare binary; an unknown flag or extra argument prints usage to stderr and exits 2. Neither starts the loopback listener or opens a browser. `whoami --help` no longer prints sign-in state.
+
+### Added
+
+- `mcpindex --version` prints the package version.
+
 ## [0.19.2] - 2026-10-21
 
 ### Security
