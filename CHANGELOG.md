@@ -5,6 +5,8 @@ additive feature, patch = fix). Backward-compatible additions only in 0.2.0.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-10-26
+
 ### Fixed
 
 - `mcpindex login` ignored every argument except `--provider`, so `mcpindex login --help`, `-h` or a mistyped flag started the real browser sign-in and stored a new key. Arguments are now parsed before anything runs: `--help` / `-h` print usage and exit 0 for every command and for the bare binary; an unknown flag or extra argument prints usage to stderr and exits 2. Neither starts the loopback listener or opens a browser. `whoami --help` no longer prints sign-in state.
